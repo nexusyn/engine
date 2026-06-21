@@ -1,0 +1,83 @@
+# golangci-lint v2.x config — formato novo (golangci-lint v2+).
+# Filosofia: zero warnings é viável quando o codebase nasce limpo.
+# v2.x suporta Go 1.25+. v1.x final (v1.64.8) parou em Go 1.24.
+
+version: "2"
+
+run:
+  timeout: 5m
+  go: "1.25"
+
+linters:
+  default: standard
+  enable:
+    # Core (bugs reais)
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+    # Estilo
+    # misspell desabilitado: lib não suporta pt-BR, flagga "comando", "persistente",
+    # "clientes" etc. como typos EN. Não vale ruído pelo benefício marginal.
+    - unconvert
+    - whitespace
+
+    # Bugs / correctness
+    - bodyclose
+    - contextcheck
+    - errorlint
+    - nilerr
+    - rowserrcheck
+    - sqlclosecheck
+
+    # Concorrência
+    - copyloopvar
+
+    # Security
+    - gosec
+
+    # Performance
+    - prealloc
+
+  settings:
+    errcheck:
+      check-blank: false
+      check-type-assertions: true
+    gosec:
+      excludes:
+        - G104  # errcheck já cobre
+        - G115  # int conversion — manejaremos pontualmente
+
+  exclusions:
+    rules:
+      # Test files são mais relaxados
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+      - path: migrations/
+        linters:
+          - revive
+          - gocritic
+      # HTTP handlers em internal/api usam o request context (r.Context()) dentro
+      # de closures do RunWithTenant — contextcheck flagga "should pass the context
+      # parameter", mas é o context inherited correto (falso-positivo). Detaches
+      # deliberados (goroutine de re-embed) usam context.Background() de propósito.
+      - path: internal/api/
+        linters:
+          - contextcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/nexusyn/engine
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 10

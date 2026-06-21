@@ -1,0 +1,69 @@
+# NEXUS — multi-stage Dockerfile
+#
+# Stage 1: builder — compila o binário Go statically linked (CGO_ENABLED=0)
+# Stage 2: runtime — alpine minimal com apenas o binário + certs + tzdata
+#
+# Image final esperada: ~25-35 MB
+
+# ───── Stage 1: builder ─────
+# go.mod exige go >= 1.26.4 (bump de segurança 939f9ef) e o build roda com
+# GOTOOLCHAIN=local — a imagem TEM que acompanhar o go.mod.
+FROM golang:1.26-alpine AS builder
+
+# Deps de build (git pra version resolution, ca-certs pra módulos privados se necessário)
+RUN apk add --no-cache git ca-certificates tzdata
+
+WORKDIR /src
+
+# Copia go.mod/go.sum primeiro pra aproveitar cache de layers do Docker
+COPY go.mod go.sum* ./
+RUN go mod download
+
+# Copia código
+COPY cmd/        cmd/
+COPY internal/   internal/
+COPY migrations/ migrations/
+
+# Args de build (passados via Makefile)
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_TIME=unknown
+
+# Compila — CGO_ENABLED=0 garante binário 100% estático (sem libc)
+RUN CGO_ENABLED=0 GOOS=linux \
+    go build \
+      -trimpath \
+      -ldflags="-s -w \
+        -X main.version=${VERSION} \
+        -X main.commit=${COMMIT} \
+        -X main.buildTime=${BUILD_TIME}" \
+      -o /out/nexus \
+      ./cmd/nexus
+
+# ───── Stage 2: runtime ─────
+FROM alpine:3.21
+
+# CA certs pra HTTPS calls a providers (Voyage, Gemini, etc.)
+# tzdata pra parsing correto de timestamps temporal-reasoning
+RUN apk add --no-cache ca-certificates tzdata && \
+    addgroup -S nexus && \
+    adduser -S -G nexus -u 10001 nexus
+
+WORKDIR /app
+
+# Binário do builder
+COPY --from=builder /out/nexus /usr/local/bin/nexus
+
+# Migrations (embed no binário, mas copiamos também pro caso de migrate via volume)
+COPY --from=builder /src/migrations /app/migrations
+
+USER nexus
+
+EXPOSE 8044
+
+# Healthcheck simples — assume binário tem flag --health-check (a implementar)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD ["/usr/local/bin/nexus", "health-check"]
+
+ENTRYPOINT ["/usr/local/bin/nexus"]
+CMD ["serve"]
