@@ -100,6 +100,7 @@ type Options struct {
 	Limit    int    // top-N fontes pro LLM (default 10)
 	Mode     string // hybrid | vector | fts (search mode)
 	Domain   string // filtrar por domain
+	Project  string // filtrar por projeto na org ("" = todos; filtrado inclui globais project IS NULL)
 
 	// MultiHop ativa sub-query fan-out: LLM decompõe a pergunta em fatos
 	// atômicos, search em cada, RRF unifica. Útil pra perguntas multi-fato
@@ -111,7 +112,7 @@ type Options struct {
 func (o *Options) Defaults() {
 	if o.Limit <= 0 {
 		// 2026-05-30: 10 → 20. Sweet spot de produção validado no LongMemEval-S
-		// (ver docs/VALIDATED-CONFIG-2026-05-29.md): limit=20 dá 85.8% vs 87.5%
+		// (see provider documentation): limit=20 dá 85.8% vs 87.5%
 		// do limit=40 usando METADE dos chunks (só -1.7pp, todo no balde preference).
 		// Recupera 100% do recall de fato-único (single-session). limit=8 era
 		// agressivo demais (78.5%). Reasoning queries sobem a 40 via EffectiveLimit.
@@ -425,6 +426,7 @@ func (s *Service) Query(ctx context.Context, orgID int64, opts Options) (*Respon
 			Limit:     searchLimit,
 			Mode:      mode,
 			Domain:    opts.Domain,
+			Project:   opts.Project,
 			AsOf:      asOf,
 			Diversify: diversifyCounts && IsCountQuery(opts.Question),
 		})
@@ -521,7 +523,18 @@ func (s *Service) Query(ctx context.Context, orgID int64, opts Options) (*Respon
 	computed := ComputeDateMath(opts.Question, time.Now().UTC())
 
 	// 3. Build prompt
+	// Gate do scratchpad: NeedsReasoning pega "best/most" → algumas preference queries
+	// entravam e recebiam a instrução de ENUMERAÇÃO (errada p/ recomendação), regredindo
+	// preference no bench n=350 (-3,3pp). Excluímos preference daqui; o scratchpad de
+	// GROUNDING específico p/ preference é um passo separado.
+	reasoning := NeedsReasoning(opts.Question) && !IsPreferenceQuery(opts.Question)
 	system := buildSystemPrompt()
+	if reasoning {
+		// Scratchpad-extract: dá ao M2.7 (sem thinking budget) um rascunho explícito
+		// pra enumerar antes de contar/ordenar/escolher-o-mais-recente. O <scratch> é
+		// descartado server-side (ver extractFinal abaixo) — raciocina sem vazar.
+		system += "\n" + scratchpadInstruction
+	}
 	user := buildUserPrompt(opts.Question, results, knownFacts, computed, userProfile)
 
 	// 4. LLM — count/aggregation queries ligam thinking (Gemini) pra enumerar
@@ -530,7 +543,7 @@ func (s *Service) Query(ctx context.Context, orgID int64, opts Options) (*Respon
 	// e o gemini-3.x flash gasta reasoning tokens que CONTAM no budget de saída —
 	// com 1024 a resposta truncava no meio da lista (preference miss).
 	maxTokens, thinkingBudget := 2048, 0
-	if NeedsReasoning(opts.Question) {
+	if reasoning {
 		thinkingBudget = ReasoningBudget
 		maxTokens = ReasoningBudget + 2048
 	}
@@ -550,6 +563,10 @@ func (s *Service) Query(ctx context.Context, orgID int64, opts Options) (*Respon
 	// fontes nem na pergunta (URL inventada por injeção). Defesa-em-profundidade sobre a
 	// não-obediência do prompt. Default ON; desliga via NEXUS_EGRESS_FILTER.
 	answer := llmResult.Content
+	if reasoning {
+		// descarta o <scratch> e devolve só o <final> (fallback robusto: nunca vaza nem esvazia)
+		answer = extractFinal(answer)
+	}
 	if egressFilterOn {
 		var g strings.Builder
 		g.WriteString(opts.Question)
@@ -587,7 +604,7 @@ func (s *Service) searchMultiHop(ctx context.Context, orgID int64, opts Options,
 	if err != nil || len(subQs) == 0 {
 		// Falha graceful: search da pergunta original
 		return s.search.Search(ctx, orgID, search.Options{
-			Query: opts.Question, Limit: searchLimit, Mode: mode, Domain: opts.Domain,
+			Query: opts.Question, Limit: searchLimit, Mode: mode, Domain: opts.Domain, Project: opts.Project,
 			Diversify: diversifyCounts && IsCountQuery(opts.Question),
 		})
 	}
@@ -606,7 +623,7 @@ func (s *Service) searchMultiHop(ctx context.Context, orgID int64, opts Options,
 	seen := make(map[int64]bool)
 	for _, q := range queries {
 		r, err := s.search.Search(ctx, orgID, search.Options{
-			Query: q, Limit: perQueryLimit, Mode: mode, Domain: opts.Domain,
+			Query: q, Limit: perQueryLimit, Mode: mode, Domain: opts.Domain, Project: opts.Project,
 			Diversify: diversifyCounts && IsCountQuery(opts.Question),
 		})
 		if err != nil {
@@ -626,7 +643,7 @@ func (s *Service) searchMultiHop(ctx context.Context, orgID int64, opts Options,
 // Day 23: regras específicas pra preferences (listar nuances) + knowledge-update
 // (preferir versão mais recente quando fato mudou cross-session).
 func buildSystemPrompt() string {
-	return `You are NEXUS, a personal memory assistant. The CONTEXT below is the USER'S OWN past conversations (the user speaks in first person — "I", "my", "me").
+	p := `You are NEXUS, a personal memory assistant. The CONTEXT below is the USER'S OWN past conversations (the user speaks in first person — "I", "my", "me").
 
 CORE RULES:
 1. EXTRACT facts from the user's own statements — even if mentioned in passing, embedded in chit-chat, or framed as a question.
@@ -699,7 +716,23 @@ OUTPUT FORMAT:
 - Never include preamble or contradicting alternatives — state only what's true.
 - TERSE: do NOT add unsolicited elaboration, definitions, or commentary AFTER the answer. If the user asks for a name, return the name and stop. Extra explanation that's wrong elsewhere can void the entire response.
 - EXCEPTION (entity mismatch, rule 4b): when the asked entity is absent and an adjacent one is present, start with "You mentioned X, not Y" then state what IS in the context. This is the ONE allowed use of "You mentioned".`
+
+	// Reforço agregativo (gated por NEXUS_GEN_AGGREGATIVE). Anexa instrução de
+	// listagem exaustiva — corrige o erro dominante de multi-hop/listas (resposta
+	// incompleta). Default OFF: prod inalterado até validar no A/B do bench.
+	if os.Getenv("NEXUS_GEN_AGGREGATIVE") == "true" {
+		p += "\n\n" + aggregativeInstruction
+	}
+	return p
 }
+
+// aggregativeInstruction reforça a listagem exaustiva em perguntas de conjunto.
+// Validado no proxy LoCoMo cat1: +6.7pp (n=74). Gated OFF em prod.
+const aggregativeInstruction = `AGGREGATIVE LISTING (for SET/LIST questions — "what activities/items/places/books/people…", "list all X", "what are the X I…"):
+- Scan the ENTIRE context and include EVERY supported item — an INCOMPLETE list (missing one item that IS in the context) is the #1 error here. Re-scan every chunk before answering.
+- Do NOT add items that are not grounded in the context (no guessing, no padding).
+- Output a single plain comma-separated list, nothing else.
+- This does NOT change single-fact questions: if the question asks for ONE value, answer with that one value.`
 
 // buildUserPrompt formata pergunta + chunks + known facts + computed +
 // user profile como contexto.

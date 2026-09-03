@@ -62,7 +62,7 @@ const (
 //
 // Falha graceful: erro de DB retorna nil + erro. Caller (runHybrid) trata o
 // sinal como opcional.
-func entityMatchSearch(ctx context.Context, tx pgx.Tx, query string, limit int, domain string, asOf *time.Time) ([]int64, error) {
+func entityMatchSearch(ctx context.Context, tx pgx.Tx, query string, limit int, domain, project string, asOf *time.Time) ([]int64, error) {
 	if query == "" {
 		return nil, nil
 	}
@@ -137,6 +137,11 @@ func entityMatchSearch(ctx context.Context, tx pgx.Tx, query string, limit int, 
 	if domain != "" {
 		args = append(args, domain)
 		sql += fmt.Sprintf(" AND p.domain = $%d", paramN)
+		paramN++
+	}
+	if project != "" {
+		args = append(args, project)
+		sql += fmt.Sprintf(" AND (p.project = $%d OR p.project IS NULL)", paramN)
 		paramN++
 	}
 	args = append(args, limit)

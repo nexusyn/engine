@@ -46,7 +46,11 @@ type DBConfig struct {
 	// Se vazio, usa URL (modo single-user — só funciona se URL aponta pra superuser).
 	AdminURL string `env:"ADMIN_DATABASE_URL"`
 
-	MaxConns int32 `env:"DB_MAX_CONNS" envDefault:"20"`
+	// MaxConns default subiu de 20→50 (2026-07-02): pool de 20 era gargalo — cada
+	// /v1/query consome várias conns simultâneas (suspensão+quota+rps+tx+auth
+	// touch), teto ~10 requests caros concorrentes. É só o fallback; prod ajusta
+	// via env no compose.
+	MaxConns int32 `env:"DB_MAX_CONNS" envDefault:"50"`
 	MinConns int32 `env:"DB_MIN_CONNS" envDefault:"2"`
 }
 

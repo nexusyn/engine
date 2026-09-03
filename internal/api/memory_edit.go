@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -14,12 +13,14 @@ import (
 
 	"github.com/nexusyn/engine/internal/core/ingest"
 	"github.com/nexusyn/engine/internal/job"
+	"github.com/nexusyn/engine/internal/metering"
 	"github.com/nexusyn/engine/internal/tenant"
 )
 
 type memoryUpdateReq struct {
 	Title   string `json:"title,omitempty"`
 	Content string `json:"content"`
+	Project string `json:"project,omitempty"` // reatribui o projeto; vazio = mantém o atual
 }
 
 // MemoryGetHandler — GET /v1/memories/{id}: uma memória com o CONTENT completo
@@ -84,17 +85,20 @@ func MemoryUpdateHandler(pool *pgxpool.Pool) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, "no tenant in context")
 			return
 		}
+		// AUD-010: paridade com update_memory (MCP) — org suspensa (billing) → 403,
+		// independente do enforce de cota. Faltava aqui (só o MCP tinha o gate).
+		if !requireOrgActive(w, r, pool, orgID) {
+			return
+		}
 		id, perr := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 		if perr != nil || id <= 0 {
 			writeError(w, http.StatusBadRequest, "invalid id")
 			return
 		}
 		var req memoryUpdateReq
-		if derr := json.NewDecoder(r.Body).Decode(&req); derr != nil {
-			writeError(w, http.StatusBadRequest, "invalid json: "+derr.Error())
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
-		defer func() { _ = r.Body.Close() }()
 		if req.Content == "" {
 			writeError(w, http.StatusBadRequest, "content é obrigatório")
 			return
@@ -104,9 +108,10 @@ func MemoryUpdateHandler(pool *pgxpool.Pool) http.HandlerFunc {
 		found := false
 		err = tenant.RunWithTenant(r.Context(), pool, orgID, func(tx pgx.Tx) error {
 			ct, e := tx.Exec(r.Context(),
-				`UPDATE pages SET content = $2, title = COALESCE(NULLIF($3, ''), title)
+				`UPDATE pages SET content = $2, title = COALESCE(NULLIF($3, ''), title),
+				        project = COALESCE(NULLIF($5, ''), project)
 				 WHERE id = $1 AND organization_id = $4 AND valid_to IS NULL`,
-				id, req.Content, req.Title, orgID)
+				id, req.Content, req.Title, orgID, metering.SanitizeProjectSlug(req.Project))
 			if e != nil {
 				return e
 			}
@@ -157,6 +162,11 @@ func MemoryDeleteHandler(pool *pgxpool.Pool) http.HandlerFunc {
 		orgID, err := tenant.OrgIDFromContext(r.Context())
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "no tenant in context")
+			return
+		}
+		// AUD-010: paridade com delete_memory (MCP) — org suspensa (billing) → 403,
+		// independente do enforce de cota. Faltava aqui (só o MCP tinha o gate).
+		if !requireOrgActive(w, r, pool, orgID) {
 			return
 		}
 		id, perr := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)

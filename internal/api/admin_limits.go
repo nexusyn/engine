@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -30,11 +29,9 @@ func AdminSetLimitsHandler(pool *pgxpool.Pool) http.HandlerFunc {
 		}
 
 		var req AdminSetLimitsRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
-		defer func() { _ = r.Body.Close() }()
 
 		if _, err := pool.Exec(r.Context(),
 			"SELECT set_org_limits($1, $2, $3, $4)",

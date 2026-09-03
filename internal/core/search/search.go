@@ -12,6 +12,7 @@ import (
 
 	"github.com/nexusyn/engine/internal/dateutil"
 	"github.com/nexusyn/engine/internal/provider/embed"
+	"github.com/nexusyn/engine/internal/provider/rerank"
 	"github.com/nexusyn/engine/internal/tenant"
 )
 
@@ -21,12 +22,19 @@ type embedResolver interface {
 	Embed(ctx context.Context) embed.Provider
 }
 
+// rerankResolver resolve, ao vivo, o reranker da config global (Módulo B — usado
+// só pra reranquear o canal do grafo). Pode devolver nil.
+type rerankResolver interface {
+	Reranker(ctx context.Context) rerank.Provider
+}
+
 // Service é o entrypoint de busca.
 // Mantém deps (pool, embed provider) injetadas no construtor.
 type Service struct {
-	pool     *pgxpool.Pool
-	embedder embed.Provider
-	resolver embedResolver // opcional — resolve embed ao vivo (config global)
+	pool      *pgxpool.Pool
+	embedder  embed.Provider
+	resolver  embedResolver  // opcional — resolve embed ao vivo (config global)
+	rerankRes rerankResolver // opcional — resolve reranker ao vivo (Módulo B, grafo)
 }
 
 // NewService constrói o Service. embedder pode ser nil — modo FTS-only.
@@ -49,12 +57,35 @@ func (s *Service) embedFor(ctx context.Context) embed.Provider {
 	return s.embedder
 }
 
+// EnableReranker liga a resolução ao vivo do reranker (Módulo B). Usado SÓ pra
+// reranquear o canal do grafo (sob NEXUS_GRAPH_RERANK); não afeta os demais
+// canais nem o rerank final do query.Service. Aditivo.
+func (s *Service) EnableReranker(r rerankResolver) { s.rerankRes = r }
+
+// rerankerFor devolve o reranker corrente (config global ao vivo), ou nil.
+func (s *Service) rerankerFor(ctx context.Context) rerank.Provider {
+	if s.rerankRes != nil {
+		return s.rerankRes.Reranker(ctx)
+	}
+	return nil
+}
+
 // Search executa busca híbrida (ou single-channel conforme Options.Mode).
 //
-// Fluxo hybrid:
+// Fluxo hybrid (ver runHybrid):
 //  1. Embeda a query via Jina (input_type=query)
-//  2. Roda vector search (top-50 chunks) em paralelo com FTS pt-BR (top-50)
-//  3. RRF fusion combina ambos → top-N final
+//  2. Roda vector search, FTS pt-BR, entity-match, canal de data e graph-expansion
+//     EM SÉRIE — todos os canais compartilham a MESMA pgx.Tx (aberta uma vez por
+//     Search, via RunWithTenantReadOnly) e pgx.Tx não é seguro pra uso concorrente
+//     por múltiplas goroutines. NÃO roda em paralelo hoje, apesar do nome do passo
+//     "hybrid" sugerir — latência do hybrid = soma da latência de cada canal.
+//     Paralelizar exigiria uma conexão/transação read-only PRÓPRIA por canal (via
+//     errgroup) e tocaria as implementações dos canais em queries.go/entity_match.go/
+//     date_anchor.go/graph_expansion.go — avaliado e ADIADO (2026-07-02): mudança
+//     de ranking exige validação em bench antes de prod, e o refactor aumentaria o
+//     nº de conexões simultâneas por query bem quando o pool está sendo ajustado
+//     (DB_MAX_CONNS). Ver NEX-005 no registro de auditoria.
+//  3. RRF fusion combina os canais → top-N final
 //  4. Hidrata chunks com page metadata
 //
 // Tenancy: usa RunWithTenantReadOnly — RLS bloqueia rows de outro tenant.
@@ -77,7 +108,7 @@ func (s *Service) Search(ctx context.Context, orgID int64, opts Options) ([]Resu
 			return err
 
 		case ModeFTS:
-			ids, err := ftsSearch(ctx, tx, opts.Query, opts.Limit, opts.Domain)
+			ids, err := ftsSearch(ctx, tx, opts.Query, opts.Limit, opts.Domain, opts.Project)
 			if err != nil {
 				return err
 			}
@@ -107,12 +138,13 @@ func (s *Service) runVector(ctx context.Context, tx pgx.Tx, opts Options) ([]int
 	if len(vecs) != 1 {
 		return nil, fmt.Errorf("search: embed retornou %d vetores (esperado 1)", len(vecs))
 	}
-	return vectorSearch(ctx, tx, vecs[0], opts.Limit, opts.Domain)
+	return vectorSearch(ctx, tx, vecs[0], opts.Limit, opts.Domain, opts.Project)
 }
 
-// runHybrid roda vector + FTS + entity-match (Sprint 2.5), faz RRF fusion,
-// aplica recency e date-anchor boosts, hidrata top-N.
-// candidatePool = max(50, 5*limit) pra ter material suficiente pra fusion.
+// runHybrid roda vector + FTS + entity-match (Sprint 2.5) + data + graph-expansion
+// EM SÉRIE (todos na MESMA tx recebida — pgx.Tx não é concorrency-safe), faz RRF
+// fusion, aplica recency e date-anchor boosts, hidrata top-N. candidatePool =
+// max(50, 5*limit) pra ter material suficiente pra fusion.
 func (s *Service) runHybrid(ctx context.Context, tx pgx.Tx, opts Options, out *[]Result) error {
 	candidatePool := opts.Limit * 5
 	if candidatePool < 50 {
@@ -128,18 +160,18 @@ func (s *Service) runHybrid(ctx context.Context, tx pgx.Tx, opts Options, out *[
 		if err != nil {
 			vecErr = fmt.Errorf("embed query: %w", err)
 		} else if len(vecs) == 1 {
-			vecIDs, vecErr = vectorSearch(ctx, tx, vecs[0], candidatePool, opts.Domain)
+			vecIDs, vecErr = vectorSearch(ctx, tx, vecs[0], candidatePool, opts.Domain, opts.Project)
 		}
 	}
 
 	// FTS (sempre roda — não depende de provider externo)
-	ftsIDs, ftsErr = ftsSearch(ctx, tx, opts.Query, candidatePool, opts.Domain)
+	ftsIDs, ftsErr = ftsSearch(ctx, tx, opts.Query, candidatePool, opts.Domain, opts.Project)
 
 	// Sprint 2.5 — entity-match (3º sinal). Trigram fuzzy em entities.name +
 	// alias match exato. Pega chunks de pages onde entities mencionadas na
 	// query foram extraídas. Falha graceful — sinal é opcional.
 	// Sprint 3.2 — asOf passa snapshot temporal (entities/edges válidos no time).
-	entIDs, entErr = entityMatchSearch(ctx, tx, opts.Query, candidatePool, opts.Domain, opts.AsOf)
+	entIDs, entErr = entityMatchSearch(ctx, tx, opts.Query, candidatePool, opts.Domain, opts.Project, opts.AsOf)
 
 	// Canal de data (migration 0022): se a query menciona datas, recupera os chunks
 	// com o token de data canônico. Determinístico — pega o chunk da data exata que
@@ -147,7 +179,7 @@ func (s *Service) runHybrid(ctx context.Context, tx pgx.Tx, opts Options, out *[
 	var dateIDs []int64
 	var dateErr error
 	if dq := dateutil.DateTSQuery(dateutil.StripContextDate(opts.Query)); dq != "" {
-		dateIDs, dateErr = dateSearch(ctx, tx, dq, candidatePool, opts.Domain)
+		dateIDs, dateErr = dateSearch(ctx, tx, dq, candidatePool, opts.Domain, opts.Project)
 	}
 
 	// Fase 1 GraphRAG — graph-expansion (5º canal, sob NEXUS_GRAPH_EXPANSION).
@@ -156,7 +188,16 @@ func (s *Service) runHybrid(ctx context.Context, tx pgx.Tx, opts Options, out *[
 	var graphIDs []int64
 	var graphErr error
 	if graphExpansionEnabled(ctx, tx) {
-		graphIDs, graphErr = graphExpansionSearch(ctx, tx, opts.Query, candidatePool, opts.Domain, opts.AsOf)
+		graphIDs, graphErr = graphExpansionSearch(ctx, tx, opts.Query, candidatePool, opts.Domain, opts.Project, opts.AsOf)
+	}
+
+	// Módulo B — rerank do canal do grafo (cross-encoder, PRÉ-FUSÃO). ADITIVO e gated
+	// (NEXUS_GRAPH_RERANK, default OFF): reordena graphIDs por relevância real à query
+	// ANTES do RRF — não toca os demais canais. Reusa o reranker configurado. Graceful.
+	if len(graphIDs) > 1 && graphRerankEnabled() {
+		if rk := s.rerankerFor(ctx); rk != nil {
+			graphIDs = s.rerankGraphChannel(ctx, tx, opts.Query, graphIDs, rk)
+		}
 	}
 
 	// Se TODOS falharam, retorna erros wrapped
@@ -217,7 +258,12 @@ func (s *Service) runHybrid(ctx context.Context, tx pgx.Tx, opts Options, out *[
 	if !anchor.IsZero() && len(fusedIDs) > 0 {
 		sessionDates, sderr := loadChunkSessionDates(ctx, tx, fusedIDs)
 		if sderr == nil {
-			scores = ApplyDateAnchorBoost(scores, sessionDates, anchor, 1.0, 7.0)
+			// maxBoost=4.0 (não 1.0): em queries temporais a resposta é
+			// semanticamente DESCONECTADA da pergunta ("o que fiz dia X?" vs a
+			// resposta) — só a data conecta. Com ×2 (maxBoost=1) o chunk certo,
+			// fraco no RRF, não subia ao top-K; ×5 na data exata garante que a
+			// sessão da data domine. Falloff 7d mantido (cobre "mês passado").
+			scores = ApplyDateAnchorBoost(scores, sessionDates, anchor, 4.0, 7.0)
 		}
 	}
 
@@ -272,6 +318,72 @@ func loadChunkPages(ctx context.Context, tx pgx.Tx, ids []int64) (map[int64]int6
 		out[cid] = pid
 	}
 	return out, rows.Err()
+}
+
+// loadChunkContent carrega o texto dos chunks por id (Módulo B — rerank do canal
+// do grafo). RLS aplica via tx do tenant; ids ausentes ficam fora do map.
+func loadChunkContent(ctx context.Context, tx pgx.Tx, ids []int64) (map[int64]string, error) {
+	out := make(map[int64]string, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT id, content FROM chunks WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var content string
+		if err := rows.Scan(&id, &content); err != nil {
+			return nil, err
+		}
+		out[id] = content
+	}
+	return out, rows.Err()
+}
+
+// rerankGraphChannel reordena os chunks do canal do grafo pela relevância semântica
+// à query (cross-encoder), pra o canal entrar LIMPO no RRF — relevância real, não só
+// hop-decay. Reusa o reranker já configurado (jina-reranker-v3). Falha graceful:
+// qualquer erro/vazio → ordem original (nunca degrada o canal).
+func (s *Service) rerankGraphChannel(ctx context.Context, tx pgx.Tx, query string, ids []int64, reranker rerank.Provider) []int64 {
+	contents, err := loadChunkContent(ctx, tx, ids)
+	if err != nil || len(contents) == 0 {
+		return ids
+	}
+	// docs paralelo a kept, na ordem original dos ids (só os com content).
+	docs := make([]string, 0, len(ids))
+	kept := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if c := contents[id]; c != "" {
+			docs = append(docs, c)
+			kept = append(kept, id)
+		}
+	}
+	if len(docs) < 2 {
+		return ids
+	}
+	ranked, err := reranker.Rerank(ctx, query, docs, len(docs))
+	if err != nil || len(ranked) == 0 {
+		return ids
+	}
+	if out := reorderByRanked(kept, ranked); len(out) > 0 {
+		return out
+	}
+	return ids
+}
+
+// reorderByRanked mapeia o resultado do reranker (item.Index na lista docs) de volta
+// pros chunk ids, na ordem ranqueada. Índices fora do range são ignorados (defensivo).
+func reorderByRanked(kept []int64, ranked []rerank.Result) []int64 {
+	out := make([]int64, 0, len(ranked))
+	for _, item := range ranked {
+		if item.Index >= 0 && item.Index < len(kept) {
+			out = append(out, kept[item.Index])
+		}
+	}
+	return out
 }
 
 // capPerPage seleciona até `limit` ids preferindo diversidade de página: na 1ª

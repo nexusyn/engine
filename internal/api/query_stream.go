@@ -30,11 +30,9 @@ func QueryStreamHandler(svc *query.Service, pool *pgxpool.Pool) http.HandlerFunc
 		}
 
 		var req QueryRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
-		defer func() { _ = r.Body.Close() }()
 
 		if req.Question == "" {
 			writeError(w, http.StatusBadRequest, "question é obrigatório")

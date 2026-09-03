@@ -1,2 +1,0 @@
-/Volumes/M5SSD/nexusyn-engine-public/internal/provider/llm/minimax_stream_live_test.go:20://	MINIMAX_API_KEY=$(op read "op://EXAMPLE/minimax-key/credential") \
-/Volumes/M5SSD/nexusyn-engine-public/.gitignore:52:/docker/data/

@@ -20,10 +20,11 @@ const (
 
 // Options parametriza uma busca.
 type Options struct {
-	Query  string // texto da pergunta/busca
-	Limit  int    // top-N final retornado (default 10)
-	Mode   Mode   // hybrid | vector | fts
-	Domain string // filtrar por domain (memory|wiki|source|...), opcional
+	Query   string // texto da pergunta/busca
+	Limit   int    // top-N final retornado (default 10)
+	Mode    Mode   // hybrid | vector | fts
+	Domain  string // filtrar por domain (memory|wiki|source|...), opcional
+	Project string // filtrar por projeto na org; "" = todos. Filtrado traz projeto + globais (project IS NULL)
 
 	// RecencyHalfLifeDays aplica boost exponencial sobre score: chunks mais
 	// novos sobem no ranking conforme exp(-age_days / halfLife). Default 30d
@@ -68,6 +69,7 @@ type Result struct {
 	PageTitle string  `json:"page_title"`
 	PageSlug  string  `json:"page_slug"`
 	Domain    string  `json:"domain"`
-	Score     float64 `json:"score"`  // score final (RRF ou raw)
+	Project   string  `json:"project,omitempty"` // "" = global
+	Score     float64 `json:"score"`             // score final (RRF ou raw)
 	Source    string  `json:"source"` // "vector" | "fts" | "hybrid"
 }

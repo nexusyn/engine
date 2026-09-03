@@ -119,6 +119,8 @@ type exportPage struct {
 	ID        int64     `json:"id"`
 	Title     string    `json:"title"`
 	Domain    string    `json:"domain"`
+	Project   string    `json:"project,omitempty"`
+	Agent     string    `json:"agent,omitempty"`
 	Content   string    `json:"content"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -140,28 +142,31 @@ func ExportHandler(pool *pgxpool.Pool) http.HandlerFunc {
 		}
 
 		// ids tem precedência (seleção explícita); senão cai no filtro domain+q.
+		// Alias "p" por causa do JOIN com agents (export fiel: project + agent no
+		// dump, senão o round-trip export→import perde segmentação e atribuição).
 		var where string
 		var args []any
 		if ids := parseIDList(r.URL.Query().Get("ids")); len(ids) > 0 {
-			where = "organization_id = $1 AND valid_to IS NULL AND id = ANY($2)"
+			where = "p.organization_id = $1 AND p.valid_to IS NULL AND p.id = ANY($2)"
 			args = []any{orgID, ids}
 		} else {
 			where, args = pageFilter(orgID, r.URL.Query().Get("domain"),
-				strings.TrimSpace(r.URL.Query().Get("q")), "")
+				r.URL.Query().Get("project"), strings.TrimSpace(r.URL.Query().Get("q")), "p")
 		}
 
 		out := []exportPage{}
 		err = tenant.RunWithTenantReadOnly(r.Context(), pool, orgID, func(tx pgx.Tx) error {
 			rows, qerr := tx.Query(r.Context(), fmt.Sprintf(
-				`SELECT id, title, domain, content, created_at
-				 FROM pages WHERE %s ORDER BY created_at DESC LIMIT %d`, where, maxExportPages), args...)
+				`SELECT p.id, p.title, p.domain, COALESCE(p.project, ''), COALESCE(a.slug, ''), p.content, p.created_at
+				 FROM pages p LEFT JOIN agents a ON a.id = p.agent_id
+				 WHERE %s ORDER BY p.created_at DESC LIMIT %d`, where, maxExportPages), args...)
 			if qerr != nil {
 				return qerr
 			}
 			defer rows.Close()
 			for rows.Next() {
 				var p exportPage
-				if serr := rows.Scan(&p.ID, &p.Title, &p.Domain, &p.Content, &p.CreatedAt); serr != nil {
+				if serr := rows.Scan(&p.ID, &p.Title, &p.Domain, &p.Project, &p.Agent, &p.Content, &p.CreatedAt); serr != nil {
 					return serr
 				}
 				out = append(out, p)

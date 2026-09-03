@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/nexusyn/engine/internal/core/search"
+	"github.com/nexusyn/engine/internal/metering"
 	"github.com/nexusyn/engine/internal/tenant"
 )
 
@@ -17,6 +18,8 @@ type SearchRequest struct {
 	Limit  int    `json:"limit,omitempty"`
 	Mode   string `json:"mode,omitempty"` // hybrid | vector | fts
 	Domain string `json:"domain,omitempty"`
+	// Project = filtra a busca por projeto (traz o projeto + as memórias globais). Opcional.
+	Project string `json:"project,omitempty"`
 }
 
 // SearchResponse é a resposta com lista de chunks.
@@ -40,11 +43,9 @@ func SearchHandler(svc *search.Service, pool *pgxpool.Pool) http.HandlerFunc {
 		}
 
 		var req SearchRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
-		defer func() { _ = r.Body.Close() }()
 
 		if req.Query == "" {
 			writeError(w, http.StatusBadRequest, "query é obrigatório")
@@ -57,10 +58,11 @@ func SearchHandler(svc *search.Service, pool *pgxpool.Pool) http.HandlerFunc {
 
 		start := time.Now()
 		opts := search.Options{
-			Query:  req.Query,
-			Limit:  req.Limit,
-			Mode:   search.Mode(req.Mode),
-			Domain: req.Domain,
+			Query:   req.Query,
+			Limit:   req.Limit,
+			Mode:    search.Mode(req.Mode),
+			Domain:  req.Domain,
+			Project: metering.SanitizeProjectSlug(req.Project),
 		}
 		opts.Defaults()
 

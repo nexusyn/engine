@@ -42,6 +42,13 @@ import (
 // re-extraído / confidence real), sem ligar pra todos de uma vez.
 var graphExpansionDefault = os.Getenv("NEXUS_GRAPH_EXPANSION") == "1" || os.Getenv("NEXUS_GRAPH_EXPANSION") == "true"
 
+// graphRerankDefault liga o rerank do canal do grafo (cross-encoder pré-fusão,
+// Módulo B). Default OFF — ADITIVO: não muda o comportamento atual do grafo até
+// ser ligado (validar no A/B antes de prod).
+var graphRerankDefault = os.Getenv("NEXUS_GRAPH_RERANK") == "1" || os.Getenv("NEXUS_GRAPH_RERANK") == "true"
+
+func graphRerankEnabled() bool { return graphRerankDefault }
+
 // graphExpansionEnabled resolve a flag PARA A ORG CORRENTE (RLS): o override em
 // organizations.settings->>'graph_expansion' (se presente) vence o default global.
 // Falha graceful — erro/ausência → default global. +1 PK-lookup por search.
@@ -93,7 +100,7 @@ var graphExpandKindsSQL = "'caused','depends_on','fixes','prevents','mitigates',
 //
 // asOf (time-travel): quando setado, seeds, arestas e pages são filtrados pelo
 // snapshot temporal — igual ao entity-match.
-func graphExpansionSearch(ctx context.Context, tx pgx.Tx, query string, limit int, domain string, asOf *time.Time) ([]int64, error) {
+func graphExpansionSearch(ctx context.Context, tx pgx.Tx, query string, limit int, domain, project string, asOf *time.Time) ([]int64, error) {
 	if query == "" {
 		return nil, nil
 	}
@@ -188,6 +195,11 @@ func graphExpansionSearch(ctx context.Context, tx pgx.Tx, query string, limit in
 	if domain != "" {
 		args = append(args, domain)
 		sql += fmt.Sprintf(" AND p.domain = $%d", paramN)
+		paramN++
+	}
+	if project != "" {
+		args = append(args, project)
+		sql += fmt.Sprintf(" AND (p.project = $%d OR p.project IS NULL)", paramN)
 		paramN++
 	}
 	args = append(args, limit)

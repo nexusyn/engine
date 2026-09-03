@@ -101,12 +101,13 @@ func (w *ExtractEntitiesWorker) Work(ctx context.Context, job *river.Job[Extract
 
 	// 1. Lê content + verifica idempotência num único SELECT
 	var content string
+	var createdAt time.Time
 	var alreadyProcessed bool
 	err := tenant.RunWithTenantReadOnly(ctx, w.pool, args.OrganizationID, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
-			SELECT content, (entities_extracted_at IS NOT NULL) AS done
+			SELECT content, created_at, (entities_extracted_at IS NOT NULL) AS done
 			FROM pages WHERE id = $1
-		`, args.PageID).Scan(&content, &alreadyProcessed)
+		`, args.PageID).Scan(&content, &createdAt, &alreadyProcessed)
 	})
 	if err != nil {
 		return fmt.Errorf("extract_entities: select page %d: %w", args.PageID, err)
@@ -126,7 +127,7 @@ func (w *ExtractEntitiesWorker) Work(ctx context.Context, job *river.Job[Extract
 
 	// 2. Chama LLM extractor (resolvido ao vivo: config global > .env)
 	extractLLM := w.extractor(ctx)
-	extracted, err := entities.Extract(ctx, extractLLM, content)
+	extracted, err := entities.Extract(ctx, extractLLM, content, createdAt)
 	if err != nil {
 		return fmt.Errorf("extract_entities: LLM page %d: %w", args.PageID, err)
 	}

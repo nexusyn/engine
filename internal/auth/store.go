@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -94,8 +96,33 @@ func findDirect(ctx context.Context, pool *pgxpool.Pool, hash string) (*TokenRec
 	return &rec, nil
 }
 
-// TouchLastUsed atualiza last_used_at do token (best-effort, não bloqueia request).
-// Roda async via goroutine.
+// touchIntervalMin — throttle do TouchLastUsed: só grava last_used_at se o valor
+// atual estiver mais velho que N minutos. Sem isso, o UPDATE disparava em
+// goroutine nova em TODO request autenticado — contenção de lock na linha
+// quente de api_tokens + bloat de dead-tuples (autovacuum) + churn de goroutine
+// sob carga, pra um campo que só precisa de precisão de minutos (é telemetria
+// de "último uso", não algo que exige exatidão por request). A condição vai
+// dentro do próprio SQL (WHERE ... last_used_at < now() - interval) — idempotente
+// e correta mesmo sob concorrência, sem precisar de estado em memória (cache/mutex).
+// Configurável via NEXUS_TOKEN_TOUCH_INTERVAL_MIN; default 5min.
+var touchIntervalMin = resolveTouchIntervalMin()
+
+func resolveTouchIntervalMin() int {
+	const def = 5
+	v := os.Getenv("NEXUS_TOKEN_TOUCH_INTERVAL_MIN")
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
+}
+
+// TouchLastUsed atualiza last_used_at do token (best-effort, não bloqueia request),
+// mas só se o valor gravado estiver mais velho que touchIntervalMin (throttle —
+// ver comentário acima). Roda async via goroutine.
 //
 // IMPORTANTE sobre context: criamos timeout fresh em vez de context.Background()
 // puro pra evitar goroutine vazar se DB ficar lento. Não herdamos do ctx do request
@@ -107,6 +134,9 @@ func TouchLastUsed(_ context.Context, pool *pgxpool.Pool, tokenID int64) {
 	go func() {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_, _ = pool.Exec(bgCtx, "UPDATE api_tokens SET last_used_at = now() WHERE id = $1", tokenID)
+		_, _ = pool.Exec(bgCtx,
+			`UPDATE api_tokens SET last_used_at = now()
+			 WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - ($2::int * interval '1 minute'))`,
+			tokenID, touchIntervalMin)
 	}()
 }

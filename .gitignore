@@ -1,81 +1,30 @@
-# Binaries
-/bin/
-/dist/
+# Binaries and build output
+bin/
+nexus
 *.exe
 *.dll
 *.so
 *.dylib
 
-# Test artifacts
-*.test
+# Test artifacts and coverage
 *.out
-coverage.txt
+*.test
 coverage.html
-.coverage
+profile.pprof
 
-# Go
-/vendor/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
+# Dependencies and temp
+vendor/
+tmp/
 .DS_Store
 
-# Env / secrets
+# Environment and secrets
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 *.pem
 *.key
 
-# Dashboard (SvelteKit)
-/dashboard/node_modules/
-/dashboard/.svelte-kit/
-/dashboard/build/
-/dashboard/.env
-
-# SDK Python
-/sdk/python/.venv/
-/sdk/python/dist/
-/sdk/python/build/
-/sdk/python/*.egg-info/
-/sdk/python/__pycache__/
-*.pyc
-
-# SDK TypeScript
-/sdk/typescript/node_modules/
-/sdk/typescript/dist/
-
-# Docker
-/docker/data/
-
-# Logs
-*.log
-/logs/
-
-# Local DB
-/tmp/
-*.sqlite
-*.sqlite3
-*.db
-
-# Generated
-/internal/api/openapi_gen.go
-/sdk/typescript/src/generated/
-/bin/nexus
-/nexus
-
-# backups locais (secrets/junk) — nunca commitar
-*.bak
-*.bak-*
-*.bak.*
-
-# Reorg 2026-05-25 — pasta única Nexus: memória do agente + docs/config locais
-/memory/
-/PLAN-V2-REWRITE-2026-05-20.md
-/.cursorrules
-
-# Dashboard novo (SvelteKit) copiado em 2026-05-25; local-only por ora
-/nexus-dashboard/
+# Local data
+/srv/data/
+/data/
+pgdata/

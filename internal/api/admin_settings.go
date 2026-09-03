@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,11 +24,9 @@ func AdminEnforcementPutHandler(pool *pgxpool.Pool) http.HandlerFunc {
 		var req struct {
 			Enabled bool `json:"enabled"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
-		defer func() { _ = r.Body.Close() }()
 
 		val := "false"
 		if req.Enabled {

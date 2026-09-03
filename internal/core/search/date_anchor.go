@@ -18,8 +18,32 @@ var (
 	dateAnchorISO    = regexp.MustCompile(`\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b`)
 	dateAnchorEnMD   = regexp.MustCompile(`(?i)\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\s+(\d{1,2})(?:[,\s]+(\d{4}))?\b`)
 	dateAnchorPtDdM  = regexp.MustCompile(`(?i)\b(\d{1,2})\s+de\s+(janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)(?:\s+de\s+(\d{4}))?\b`)
-	dateAnchorRelAgo = regexp.MustCompile(`(?i)\b(\d+)\s+(day|days|week|weeks|month|months|dia|dias|semana|semanas|m[eê]s|meses)\s+(ago|atr[áa]s)\b`)
+	// "N <unit> ago" — aceita dígito OU número por extenso (en/pt) e "a/an/um(a)".
+	dateAnchorRelAgo = regexp.MustCompile(`(?i)\b(\d+|an?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|um|uma|dois|duas|tr[êe]s|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)\s+(day|days|week|weeks|month|months|dia|dias|semana|semanas|m[eê]s|meses)\s+(ago|atr[áa]s)\b`)
+	// "last/past/this <weekday>" (en).
+	dateAnchorWeekdayEN = regexp.MustCompile(`(?i)\b(?:last|past|this)\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b`)
+	// "última <dia>" / "<dia> passad[ao]" (pt).
+	dateAnchorWeekdayPT = regexp.MustCompile(`(?i)\b(?:[úu]ltim[ao]\s+(domingo|segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado)|(domingo|segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado)(?:-feira)?\s+passad[ao])\b`)
+	// "last/past week|month|weekend" (en).
+	dateAnchorLastUnit = regexp.MustCompile(`(?i)\b(?:last|past)\s+(week|month|weekend)\b`)
 )
+
+// numberWords mapeia números por extenso (en/pt) + artigos "a/an/um(a)" = 1.
+var numberWords = map[string]int{
+	"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+	"seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+	"um": 1, "uma": 1, "dois": 2, "duas": 2, "tres": 3, "três": 3, "quatro": 4, "cinco": 5,
+	"seis": 6, "sete": 7, "oito": 8, "nove": 9, "dez": 10, "onze": 11, "doze": 12,
+}
+
+// anchorWeekday mapeia nomes de dia da semana (en/pt) para time.Weekday.
+var anchorWeekday = map[string]time.Weekday{
+	"sunday": time.Sunday, "monday": time.Monday, "tuesday": time.Tuesday,
+	"wednesday": time.Wednesday, "thursday": time.Thursday, "friday": time.Friday, "saturday": time.Saturday,
+	"domingo": time.Sunday, "segunda": time.Monday, "terca": time.Tuesday, "terça": time.Tuesday,
+	"quarta": time.Wednesday, "quinta": time.Thursday, "sexta": time.Friday,
+	"sabado": time.Saturday, "sábado": time.Saturday,
+}
 
 var anchorMonthEN = map[string]time.Month{
 	"january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3,
@@ -73,18 +97,59 @@ func DetectDateAnchor(question string, now time.Time) time.Time {
 		}
 	}
 	if m := dateAnchorRelAgo.FindStringSubmatch(question); m != nil {
-		n, _ := strconv.Atoi(m[1])
-		unit := lowerASCII(m[2])
-		switch unit {
-		case "day", "days", "dia", "dias":
-			return now.AddDate(0, 0, -n)
-		case "week", "weeks", "semana", "semanas":
-			return now.AddDate(0, 0, -7*n)
-		case "month", "months", "mês", "mes", "meses":
-			return now.AddDate(0, -n, 0)
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			n = numberWords[lowerASCII(m[1])]
+		}
+		if n > 0 {
+			switch lowerASCII(m[2]) {
+			case "day", "days", "dia", "dias":
+				return now.AddDate(0, 0, -n)
+			case "week", "weeks", "semana", "semanas":
+				return now.AddDate(0, 0, -7*n)
+			case "month", "months", "mês", "mes", "meses":
+				return now.AddDate(0, -n, 0)
+			}
+		}
+	}
+	// dia da semana relativo: "last/past/this Friday", "última sexta", "sexta passada"
+	if m := dateAnchorWeekdayEN.FindStringSubmatch(question); m != nil {
+		if wd, ok := anchorWeekday[lowerASCII(m[1])]; ok {
+			return lastWeekday(now, wd)
+		}
+	}
+	if m := dateAnchorWeekdayPT.FindStringSubmatch(question); m != nil {
+		name := m[1]
+		if name == "" {
+			name = m[2]
+		}
+		if wd, ok := anchorWeekday[lowerASCII(name)]; ok {
+			return lastWeekday(now, wd)
+		}
+	}
+	// "last/past week|month|weekend"
+	if m := dateAnchorLastUnit.FindStringSubmatch(question); m != nil {
+		switch lowerASCII(m[1]) {
+		case "week":
+			return now.AddDate(0, 0, -7)
+		case "month":
+			return now.AddDate(0, -1, 0)
+		case "weekend":
+			return lastWeekday(now, time.Saturday)
 		}
 	}
 	return time.Time{}
+}
+
+// lastWeekday retorna a ocorrência mais recente de wd ESTRITAMENTE antes de hoje
+// (se hoje já é wd, volta 7 dias). Meia-noite UTC, pra casar com [Session date].
+func lastWeekday(now time.Time, wd time.Weekday) time.Time {
+	diff := (int(now.Weekday()) - int(wd) + 7) % 7
+	if diff == 0 {
+		diff = 7
+	}
+	d := now.AddDate(0, 0, -diff)
+	return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, time.UTC)
 }
 
 func safeDate(y, mo, d int) time.Time {

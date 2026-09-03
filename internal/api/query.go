@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/nexusyn/engine/internal/core/query"
+	"github.com/nexusyn/engine/internal/metering"
 	"github.com/nexusyn/engine/internal/tenant"
 )
 
@@ -16,6 +17,8 @@ type QueryRequest struct {
 	Limit    int    `json:"limit,omitempty"`
 	Mode     string `json:"mode,omitempty"` // hybrid | vector | fts
 	Domain   string `json:"domain,omitempty"`
+	// Project = filtra a busca por projeto (traz o projeto + as memórias globais). Opcional.
+	Project string `json:"project,omitempty"`
 	// Agent = slug da IA que está consultando (atribuição de uso/billing).
 	Agent string `json:"agent,omitempty"`
 	// MultiHop ativa decomposição em sub-queries via LLM (1 call extra).
@@ -34,11 +37,9 @@ func QueryHandler(svc *query.Service, pool *pgxpool.Pool) http.HandlerFunc {
 		}
 
 		var req QueryRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
-		defer func() { _ = r.Body.Close() }()
 
 		if req.Question == "" {
 			writeError(w, http.StatusBadRequest, "question é obrigatório")
@@ -61,6 +62,7 @@ func QueryHandler(svc *query.Service, pool *pgxpool.Pool) http.HandlerFunc {
 			Limit:    req.Limit,
 			Mode:     req.Mode,
 			Domain:   req.Domain,
+			Project:  metering.SanitizeProjectSlug(req.Project),
 			MultiHop: req.MultiHop,
 		})
 		if err != nil {

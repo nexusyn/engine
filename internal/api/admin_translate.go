@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -26,11 +25,9 @@ func AdminTranslateHandler(resolver genResolver) http.HandlerFunc {
 			Text   string `json:"text"`
 			Target string `json:"target"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
-		defer func() { _ = r.Body.Close() }()
 
 		req.Text = strings.TrimSpace(req.Text)
 		if req.Text == "" {

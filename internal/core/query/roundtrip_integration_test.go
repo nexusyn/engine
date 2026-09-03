@@ -44,7 +44,7 @@ import (
 )
 
 const (
-	pgImage   = "pgvector/pgvector:pg17"
+	pgImage   = "pgvector/pgvector:pg18"
 	dbName    = "nexus_test"
 	adminUser = "nexus_admin"
 	adminPwd  = "admin-test"
@@ -225,7 +225,7 @@ func TestMemoryRoundTrip(t *testing.T) {
 	// Workers in-process pro pipeline de ingest.
 	workers := river.NewWorkers()
 	entitiesLLM := &capturingLLM{response: `{"entities":[],"edges":[]}`}
-	require.NoError(t, job.RegisterCoreWorkers(workers, pool))
+	require.NoError(t, job.RegisterCoreWorkers(workers, pool, nil))
 	require.NoError(t, job.RegisterEmbedWorker(workers, pool, &fakeEmbedder{dim: embedDims}, nil, 50))
 	require.NoError(t, job.RegisterExtractEntitiesWorker(workers, pool, entitiesLLM, nil))
 

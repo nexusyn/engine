@@ -43,7 +43,7 @@ import (
 )
 
 const (
-	pgImage   = "pgvector/pgvector:pg17"
+	pgImage   = "pgvector/pgvector:pg18"
 	dbName    = "nexus_test"
 	adminUser = "nexus_admin"
 	adminPwd  = "admin-test"

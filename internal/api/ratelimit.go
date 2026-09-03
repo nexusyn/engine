@@ -2,6 +2,8 @@ package api
 
 import (
 	"net/http"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -72,6 +74,57 @@ func (rl *RateLimiter) allow(r *http.Request, orgID int64) bool {
 		return true
 	}
 	return limiter.Allow()
+}
+
+// ───── Baseline de leitura SEMPRE ATIVO (independente do enforcement de billing) ─────
+//
+// O RateLimiter acima é gated por NEXUS_ENFORCE_LIMITS — em prod hoje esse switch
+// está OFF, então /v1/query, /v1/search e /v1/query/stream ficam sem NENHUM teto
+// de throughput por token válido. As mutações do MCP (add/update/delete_memory)
+// já tinham esse problema resolvido: allowMutation em internal/mcp/server.go é um
+// token bucket in-memory por token_id, sempre ativo, independente do billing.
+// baselineReadLimiters espelha o MESMO padrão para as leituras (por org, já que
+// os handlers HTTP resolvem orgID cedo e não token_id). Continua valendo mesmo
+// depois que o enforcement de billing for ligado — é uma camada de proteção
+// distinta, não uma cota de plano.
+var (
+	baselineReadLimiters   = map[int64]*rate.Limiter{}
+	baselineReadLimitersMu sync.Mutex
+	baselineReadRPM        = envQueryRPM()
+)
+
+// envQueryRPM lê NEXUS_QUERY_RPM (rpm por org); ausente/inválido → default 120.
+// Mesma convenção do envInt em internal/mcp/server.go (MCP_MUTATION_RPM): 0 (ou
+// negativo) É um valor válido explícito e SIGNIFICA "desligado" — ver
+// allowBaselineRead, que trata <=0 como ilimitado.
+func envQueryRPM() int {
+	const def = 120
+	v := os.Getenv("NEXUS_QUERY_RPM")
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+// allowBaselineRead consome 1 token do bucket de leitura da org. true = passa.
+// SEMPRE ativo — não olha metering.Enforced(). Reseta no restart (ok pra
+// anti-abuso, mesmo trade-off do allowMutation do MCP).
+func allowBaselineRead(orgID int64) bool {
+	if orgID == 0 || baselineReadRPM <= 0 {
+		return true
+	}
+	baselineReadLimitersMu.Lock()
+	lim, ok := baselineReadLimiters[orgID]
+	if !ok {
+		lim = rate.NewLimiter(rate.Limit(float64(baselineReadRPM)/60.0), baselineReadRPM/2+1)
+		baselineReadLimiters[orgID] = lim
+	}
+	baselineReadLimitersMu.Unlock()
+	return lim.Allow()
 }
 
 // Middleware é o http middleware (montar APÓS o auth — precisa da org no ctx).

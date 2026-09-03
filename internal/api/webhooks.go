@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
@@ -77,11 +76,9 @@ func WebhookCreateHandler(pool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 		var req createWebhookReq
-		if derr := json.NewDecoder(r.Body).Decode(&req); derr != nil {
-			writeError(w, http.StatusBadRequest, "invalid json: "+derr.Error())
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
-		defer func() { _ = r.Body.Close() }()
 		if req.URL == "" {
 			writeError(w, http.StatusBadRequest, "url é obrigatória")
 			return

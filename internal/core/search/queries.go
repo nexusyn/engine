@@ -20,7 +20,7 @@ const maxVectorDistance = 1.0
 
 // vectorSearch retorna chunks ordenados por similaridade semântica (cosine).
 // Opera dentro da transação passada — RLS já está bindada via RunWithTenant.
-func vectorSearch(ctx context.Context, tx pgx.Tx, queryVec []float32, limit int, domain string) ([]int64, error) {
+func vectorSearch(ctx context.Context, tx pgx.Tx, queryVec []float32, limit int, domain, project string) ([]int64, error) {
 	if len(queryVec) == 0 {
 		return nil, fmt.Errorf("search: query embedding vazio")
 	}
@@ -35,8 +35,13 @@ func vectorSearch(ctx context.Context, tx pgx.Tx, queryVec []float32, limit int,
 		WHERE c.embedding IS NOT NULL`
 	args := []any{pgvector.NewVector(queryVec)}
 	if domain != "" {
-		q += ` AND p.domain = ` + intToParam(2)
 		args = append(args, domain)
+		q += ` AND p.domain = ` + intToParam(len(args))
+	}
+	if project != "" {
+		// Memória por projeto: traz o projeto + as globais (project IS NULL). F0.
+		args = append(args, project)
+		q += ` AND (p.project = ` + intToParam(len(args)) + ` OR p.project IS NULL)`
 	}
 	// Gate de threshold semântico: descarta candidatos near-ortogonais (item E).
 	q += fmt.Sprintf(` AND (c.embedding <=> $1) <= %g`, maxVectorDistance)
@@ -67,7 +72,7 @@ func vectorSearch(ctx context.Context, tx pgx.Tx, queryVec []float32, limit int,
 // benchmark (LongMemEval) são em inglês; stemming inglês normaliza conjugação
 // ("attend"/"attending"). TODO futuro: idioma por-org (coluna lang + tsvector
 // por trigger) pra atender corpora PT sem degradar.
-func ftsSearch(ctx context.Context, tx pgx.Tx, query string, limit int, domain string) ([]int64, error) {
+func ftsSearch(ctx context.Context, tx pgx.Tx, query string, limit int, domain, project string) ([]int64, error) {
 	if query == "" {
 		return nil, nil
 	}
@@ -84,8 +89,13 @@ func ftsSearch(ctx context.Context, tx pgx.Tx, query string, limit int, domain s
 		WHERE c.content_tsv @@ plainto_tsquery('` + ftsConfig + `', $1)`
 	args := []any{query}
 	if domain != "" {
-		q += ` AND p.domain = ` + intToParam(2)
 		args = append(args, domain)
+		q += ` AND p.domain = ` + intToParam(len(args))
+	}
+	if project != "" {
+		// Memória por projeto: traz o projeto + as globais (project IS NULL). F0.
+		args = append(args, project)
+		q += ` AND (p.project = ` + intToParam(len(args)) + ` OR p.project IS NULL)`
 	}
 	q += ` ORDER BY ts_rank(c.content_tsv, plainto_tsquery('` + ftsConfig + `', $1)) DESC LIMIT ` + intToParam(len(args)+1)
 	args = append(args, limit)
@@ -116,7 +126,7 @@ func loadResults(ctx context.Context, tx pgx.Tx, ids []int64, scores map[int64]f
 	}
 
 	sql := `
-		SELECT c.id, c.page_id, c.position, c.content, p.title, p.slug, p.domain
+		SELECT c.id, c.page_id, c.position, c.content, p.title, p.slug, p.domain, COALESCE(p.project, '')
 		FROM chunks c
 		JOIN pages p ON p.id = c.page_id
 		WHERE c.id = ANY($1)`
@@ -135,7 +145,7 @@ func loadResults(ctx context.Context, tx pgx.Tx, ids []int64, scores map[int64]f
 	byID := make(map[int64]Result, len(ids))
 	for rows.Next() {
 		var r Result
-		if err := rows.Scan(&r.ChunkID, &r.PageID, &r.Position, &r.Content, &r.PageTitle, &r.PageSlug, &r.Domain); err != nil {
+		if err := rows.Scan(&r.ChunkID, &r.PageID, &r.Position, &r.Content, &r.PageTitle, &r.PageSlug, &r.Domain, &r.Project); err != nil {
 			return nil, fmt.Errorf("load scan: %w", err)
 		}
 		r.Score = scores[r.ChunkID]
@@ -230,7 +240,7 @@ func intToParam(n int) string {
 // Canal DETERMINÍSTICO (config 'simple', token alfanumérico fica inteiro): recupera
 // o chunk da data exata mesmo quando vetor/FTS não pegam (formatos/idiomas diferentes
 // — "01 de junho de 2026" vs "2026.06.01"). É a peça que faltava no balde temporal.
-func dateSearch(ctx context.Context, tx pgx.Tx, dateQuery string, limit int, domain string) ([]int64, error) {
+func dateSearch(ctx context.Context, tx pgx.Tx, dateQuery string, limit int, domain, project string) ([]int64, error) {
 	if dateQuery == "" {
 		return nil, nil
 	}
@@ -244,8 +254,13 @@ func dateSearch(ctx context.Context, tx pgx.Tx, dateQuery string, limit int, dom
 		WHERE c.dates_tsv @@ to_tsquery('simple', $1)`
 	args := []any{dateQuery}
 	if domain != "" {
-		q += ` AND p.domain = ` + intToParam(2)
 		args = append(args, domain)
+		q += ` AND p.domain = ` + intToParam(len(args))
+	}
+	if project != "" {
+		// Memória por projeto: traz o projeto + as globais (project IS NULL). F0.
+		args = append(args, project)
+		q += ` AND (p.project = ` + intToParam(len(args)) + ` OR p.project IS NULL)`
 	}
 	q += ` ORDER BY ts_rank(c.dates_tsv, to_tsquery('simple', $1)) DESC LIMIT ` + intToParam(len(args)+1)
 	args = append(args, limit)

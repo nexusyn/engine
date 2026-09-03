@@ -25,6 +25,7 @@ import (
 
 	domains "github.com/nexusyn/engine/internal/core/domain"
 	"github.com/nexusyn/engine/internal/core/graph"
+	"github.com/nexusyn/engine/internal/core/guideline"
 	"github.com/nexusyn/engine/internal/core/ingest"
 	"github.com/nexusyn/engine/internal/core/query"
 	"github.com/nexusyn/engine/internal/job"
@@ -45,6 +46,7 @@ type addMemoryIn struct {
 	Title   string `json:"title,omitempty" jsonschema:"título curto opcional"`
 	Domain  string `json:"domain,omitempty" jsonschema:"opcional, default 'memory'. Só ENTRADA: 'memory' (observação bruta — quase sempre esta), 'knowledge' (referência curada), 'guideline' (padrão obrigatório) ou 'skill' (catálogo de skill no formato SKILL.md). NÃO use wiki/lesson/decision/error nem domínios próprios: esses são DERIVADOS automaticamente das memórias pelo compile; qualquer valor fora da lista vira 'memory'."`
 	Agent   string `json:"agent,omitempty" jsonschema:"slug da IA que está salvando (ex: claude, cursor, gemini) — agrupa a memória por agente"`
+	Project string `json:"project,omitempty" jsonschema:"slug do projeto (ex: nexusyn, reachyn) — segmenta a memória por projeto dentro da org; vazio = global/geral"`
 }
 
 // normalizeInputDomain protege o pipeline: vazio ou domínio fora da lista de
@@ -117,17 +119,39 @@ func auditKind(domain, action string) string {
 	return "memory." + action
 }
 
-// clampSearchLimit limita o `limit` do search_memory: piso 5 (default amigável)
-// e TETO 100. Sem o teto, um limit gigante propaga pra busca vetorial/rerank →
-// query cara (DoS de custo/latência). (R1 da reauditoria.)
+// clampSearchLimit limita o `limit` do search_memory: default 20 e TETO 100. O
+// default 20 é o sweet spot validado no LongMemEval (idêntico ao /v1/query e ao
+// LME_LIMIT do bench) — o piso anterior de 5 fazia o recall via MCP (a memória que
+// os agentes de fato usam) ver só 5 chunks e perder fatos que o bench, rodando com
+// 20, media como presentes. Sem o teto, um limit gigante propaga pra busca
+// vetorial/rerank → query cara (DoS de custo/latência). (R1 da reauditoria.)
 func clampSearchLimit(n int) int {
 	if n <= 0 {
-		return 5
+		return 20
 	}
 	if n > 100 {
 		return 100
 	}
 	return n
+}
+
+// maxSnippetBytes limita o trecho cru de cada fonte devolvido por search_memory.
+// O snippet preserva o fato EXATO (host, id, número, endpoint) que a `answer`
+// destilada pode resumir e perder — o agente lê o verbatim, não só o resumo.
+const maxSnippetBytes = 400
+
+// snippet recorta o conteúdo cru de um chunk pra caber na resposta sem quebrar no
+// meio de uma palavra. Vazio → vazio (omitido no JSON).
+func snippet(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= maxSnippetBytes {
+		return s
+	}
+	cut := s[:maxSnippetBytes]
+	if i := strings.LastIndexByte(cut, ' '); i > maxSnippetBytes/2 {
+		cut = cut[:i]
+	}
+	return cut + "…"
 }
 
 // maxTitleBytes limita o título aceito via MCP (R7). Título é cosmético; truncar
@@ -185,6 +209,35 @@ func allowMutation(ctx context.Context) bool {
 	return lim.Allow()
 }
 
+// Throttle de LEITURA por token — baseline SEMPRE ativo, independente de
+// NEXUS_ENFORCE_LIMITS (billing). Mesmo padrão do allowMutation acima, mas para
+// search_memory/get_related/graph_overview: essas tools já custam embed+rerank+
+// LLM (search_memory) ou travessia de grafo, e hoje não tinham NENHUM teto de
+// throughput fora da quota mensal (que só bloqueia com enforcement ligado — OFF
+// em prod). Mesmo nome de env do baseline HTTP equivalente
+// (internal/api/ratelimit.go), consistente pro operador configurar um valor só:
+// NEXUS_QUERY_RPM (default 120/min por token; 0 desliga).
+var (
+	readLimiters   = map[int64]*rate.Limiter{}
+	readLimitersMu sync.Mutex
+	readRPM        = envInt("NEXUS_QUERY_RPM", 120)
+)
+
+func allowRead(ctx context.Context) bool {
+	tokenID := tenant.TokenIDFromContext(ctx)
+	if tokenID == 0 || readRPM <= 0 {
+		return true
+	}
+	readLimitersMu.Lock()
+	lim, ok := readLimiters[tokenID]
+	if !ok {
+		lim = rate.NewLimiter(rate.Limit(float64(readRPM)/60.0), readRPM/2+1)
+		readLimiters[tokenID] = lim
+	}
+	readLimitersMu.Unlock()
+	return lim.Allow()
+}
+
 // hasFlag testa pertencimento EXATO de uma ability (sem expandir o curinga "*").
 // Usado para flags-deny aditivas (ex.: "no_delete"): um token "*" NÃO contém
 // literalmente "no_delete", então não é barrado — só quem traz a flag explícita.
@@ -203,22 +256,22 @@ type addMemoryOut struct {
 }
 
 type searchIn struct {
-	Query string `json:"query" jsonschema:"o que recuperar da memória do usuário"`
-	Limit int    `json:"limit,omitempty" jsonschema:"nº de fontes a considerar (default 5)"`
+	Query   string `json:"query" jsonschema:"o que recuperar da memória do usuário"`
+	Limit   int    `json:"limit,omitempty" jsonschema:"nº de fontes a considerar (default 20, máx 100)"`
+	Project string `json:"project,omitempty" jsonschema:"filtra a busca por projeto (traz o projeto + as memórias globais sem projeto); vazio = busca em tudo"`
 }
 
 type sourceRef struct {
-	ID     int64  `json:"id"`
-	Title  string `json:"title"`
-	Domain string `json:"domain,omitempty"`
+	ID      int64  `json:"id"`
+	Title   string `json:"title"`
+	Domain  string `json:"domain,omitempty"`
+	Project string `json:"project,omitempty"` // "" = global
+	Snippet string `json:"snippet,omitempty"` // trecho cru do chunk top da fonte — preserva o fato exato que a answer pode destilar/omitir
 }
 
 // guidelineItem é uma guideline (padrão obrigatório) da org — memória de domain="guideline".
-type guidelineItem struct {
-	ID      int64  `json:"id"`
-	Title   string `json:"title"`
-	Content string `json:"content"`
-}
+// Alias do tipo canônico em core/guideline (fonte única reusada por MCP e HTTP).
+type guidelineItem = guideline.Item
 
 type searchOut struct {
 	// Guideline vem FIXADA no topo de toda busca: padrões obrigatórios da org que o
@@ -271,6 +324,7 @@ type updateMemoryIn struct {
 	ID      int64  `json:"id" jsonschema:"id da memória a editar (obtido via search_memory)"`
 	Content string `json:"content" jsonschema:"novo conteúdo markdown completo (substitui o anterior)"`
 	Title   string `json:"title,omitempty" jsonschema:"novo título (opcional; mantém o atual se vazio)"`
+	Project string `json:"project,omitempty" jsonschema:"reatribui o projeto (slug: nexusyn, reachyn…); vazio = mantém o projeto atual"`
 }
 
 type updateMemoryOut struct {
@@ -288,41 +342,25 @@ type deleteMemoryOut struct {
 	Status string `json:"status"`
 }
 
-// fetchGuideline carrega as guidelinees vigentes da org (domain="guideline",
-// não-deletadas) de forma DETERMINÍSTICA — sem embedding/busca. É a "receita
-// obrigatória" que o agente deve ler antes de agir.
+// fetchGuideline carrega as guidelines vigentes da org de forma DETERMINÍSTICA
+// — sem embedding/busca. É a "receita obrigatória" que o agente deve ler antes
+// de agir. Delega a core/guideline.Fetch (fonte única, reusada por GET /v1/context).
 func fetchGuideline(ctx context.Context, pool *pgxpool.Pool, orgID int64) ([]guidelineItem, error) {
-	if pool == nil {
-		return nil, nil
-	}
-	var items []guidelineItem
-	err := tenant.RunWithTenantReadOnly(ctx, pool, orgID, func(tx pgx.Tx) error {
-		rows, e := tx.Query(ctx,
-			`SELECT id, title, content FROM pages
-			 WHERE organization_id = $1 AND domain = 'guideline' AND valid_to IS NULL
-			 ORDER BY id`, orgID)
-		if e != nil {
-			return e
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var it guidelineItem
-			if e := rows.Scan(&it.ID, &it.Title, &it.Content); e != nil {
-				return e
-			}
-			items = append(items, it)
-		}
-		return rows.Err()
-	})
-	return items, err
+	return guideline.Fetch(ctx, pool, orgID)
 }
 
 func newServer(d Deps) *mcpsdk.Server {
+	// Instructions de servidor: chegam a TODO cliente MCP no initialize e roteiam
+	// a decisão "onde salvar memória" — sem isto a memória local do host (Claude
+	// Code auto-memory, Cursor memories) vence por estar no system prompt, e o
+	// usuário acha que salvou "no Nexusyn" quando foi num arquivo local.
 	s := mcpsdk.NewServer(&mcpsdk.Implementation{
 		Name:    "nexus",
 		Title:   "NEXUS Memory",
 		Version: d.Version,
-	}, nil)
+	}, &mcpsdk.ServerOptions{
+		Instructions: "Nexusyn é a memória persistente CANÔNICA do usuário — compartilhada entre sessões, agentes (Claude/Cursor/Codex/…) e máquinas, e visível no dashboard. Quando o usuário pedir para lembrar, salvar, registrar ou vincular algo entre sessões (ex.: \"lembre disso\", \"salve na memória\", \"vincule este projeto ao Jira X\"), salve AQUI com add_memory — mesmo que o seu host tenha memória local própria (Claude Code auto-memory, Cursor memories): a local não é compartilhada entre agentes nem aparece no dashboard do usuário. Use search_memory no início de tarefas que possam depender de contexto anterior; corrija memória errada com update_memory/delete_memory em vez de empilhar outra.",
+	})
 
 	mcpsdk.AddTool(s, &mcpsdk.Tool{
 		Name:        "add_memory",
@@ -385,6 +423,7 @@ func newServer(d Deps) *mcpsdk.Server {
 			Title:          title,
 			Content:        in.Content,
 			Domain:         domain,
+			Project:        metering.SanitizeProjectSlug(in.Project),
 		}, &river.InsertOpts{})
 		if err != nil {
 			return nil, addMemoryOut{}, fmt.Errorf("enqueue: %w", err)
@@ -412,6 +451,9 @@ func newServer(d Deps) *mcpsdk.Server {
 		if orgSuspended(ctx, d.Pool, orgID) {
 			return nil, searchOut{}, fmt.Errorf("organização suspensa — regularize o billing pra continuar")
 		}
+		if !allowRead(ctx) {
+			return nil, searchOut{}, fmt.Errorf("rate limit de leitura atingido — tente novamente em instantes")
+		}
 		if strings.TrimSpace(in.Query) == "" {
 			return nil, searchOut{}, fmt.Errorf("query é obrigatória")
 		}
@@ -427,6 +469,7 @@ func newServer(d Deps) *mcpsdk.Server {
 			Question: in.Query,
 			Limit:    limit,
 			Mode:     "hybrid",
+			Project:  metering.SanitizeProjectSlug(in.Project),
 		})
 		if err != nil {
 			return nil, searchOut{}, fmt.Errorf("query: %w", err)
@@ -438,7 +481,10 @@ func newServer(d Deps) *mcpsdk.Server {
 				continue
 			}
 			seen[r.PageID] = true
-			srcs = append(srcs, sourceRef{ID: r.PageID, Title: r.PageTitle, Domain: r.Domain})
+			// resp.Sources já vem ordenado por relevância (pós-rerank), então o
+			// primeiro chunk de cada page é o mais relevante dela — o snippet cru
+			// garante que o fato exato chega ao agente mesmo se a answer o resumir.
+			srcs = append(srcs, sourceRef{ID: r.PageID, Title: r.PageTitle, Domain: r.Domain, Project: r.Project, Snippet: snippet(r.Content)})
 		}
 		// Metering: search_memory não metrificava (uso MCP cego no relatório).
 		if d.Pool != nil {
@@ -490,7 +536,7 @@ func newServer(d Deps) *mcpsdk.Server {
 	// em vez de empilhar outra contradizendo. Pegue o id via search_memory.
 	mcpsdk.AddTool(s, &mcpsdk.Tool{
 		Name:        "update_memory",
-		Description: "Edita uma memória existente IN-PLACE (substitui o conteúdo e re-embeda, então a busca passa a refletir). Use pra CORRIGIR memória desatualizada em vez de adicionar outra contradizendo. Obtenha o id via search_memory.",
+		Description: "Edita uma memória existente IN-PLACE (substitui o conteúdo e re-embeda, então a busca passa a refletir). Use pra CORRIGIR memória desatualizada em vez de adicionar outra contradizendo. Também reatribui o projeto (campo project; vazio mantém o atual). Obtenha o id via search_memory.",
 	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, in updateMemoryIn) (*mcpsdk.CallToolResult, updateMemoryOut, error) {
 		orgID, err := tenant.OrgIDFromContext(ctx)
 		if err != nil {
@@ -520,11 +566,11 @@ func newServer(d Deps) *mcpsdk.Server {
 			// Lê o estado atual ANTES de sobrescrever: para guardar o conteúdo
 			// anterior no audit (update é in-place, então o snapshot no events é o
 			// que torna a operação recuperável).
-			var prevDomain, prevTitle, prevContent string
+			var prevDomain, prevTitle, prevContent, prevProject string
 			e := tx.QueryRow(ctx,
-				`SELECT domain, title, content FROM pages
+				`SELECT domain, title, content, COALESCE(project, '') FROM pages
 				 WHERE id = $1 AND organization_id = $2 AND valid_to IS NULL`,
-				in.ID, orgID).Scan(&prevDomain, &prevTitle, &prevContent)
+				in.ID, orgID).Scan(&prevDomain, &prevTitle, &prevContent, &prevProject)
 			if errors.Is(e, pgx.ErrNoRows) {
 				return nil // found=false → 404 amigável
 			}
@@ -532,9 +578,10 @@ func newServer(d Deps) *mcpsdk.Server {
 				return e
 			}
 			if _, e := tx.Exec(ctx,
-				`UPDATE pages SET content = $2, title = COALESCE(NULLIF($3, ''), title)
+				`UPDATE pages SET content = $2, title = COALESCE(NULLIF($3, ''), title),
+				        project = COALESCE(NULLIF($5, ''), project)
 				 WHERE id = $1 AND organization_id = $4 AND valid_to IS NULL`,
-				in.ID, in.Content, in.Title, orgID); e != nil {
+				in.ID, in.Content, in.Title, orgID, metering.SanitizeProjectSlug(in.Project)); e != nil {
 				return e
 			}
 			found = true
@@ -550,7 +597,7 @@ func newServer(d Deps) *mcpsdk.Server {
 			}
 			auditEvent(ctx, tx, orgID, 0, auditKind(prevDomain, "updated"), map[string]any{
 				"via": "mcp", "page_id": in.ID, "domain": prevDomain,
-				"prev_title": prevTitle, "prev_content": prevContent,
+				"prev_title": prevTitle, "prev_content": prevContent, "prev_project": prevProject,
 			})
 			return nil
 		})
@@ -646,6 +693,12 @@ func newServer(d Deps) *mcpsdk.Server {
 		if err != nil {
 			return nil, getRelatedOut{}, fmt.Errorf("sem tenant no contexto (token ausente/inválido)")
 		}
+		if orgSuspended(ctx, d.Pool, orgID) { // AUD-010: leitura do grafo é data-plane (conteúdo do cliente)
+			return nil, getRelatedOut{}, fmt.Errorf("organização suspensa — regularize o billing pra continuar")
+		}
+		if !allowRead(ctx) {
+			return nil, getRelatedOut{}, fmt.Errorf("rate limit de leitura atingido — tente novamente em instantes")
+		}
 		name := strings.TrimSpace(in.Entity)
 		if name == "" {
 			return nil, getRelatedOut{}, fmt.Errorf("get_related: 'entity' é obrigatório")
@@ -682,6 +735,12 @@ func newServer(d Deps) *mcpsdk.Server {
 		if err != nil {
 			return nil, graphOverviewOut{}, fmt.Errorf("sem tenant no contexto (token ausente/inválido)")
 		}
+		if orgSuspended(ctx, d.Pool, orgID) { // AUD-010: leitura do grafo é data-plane (conteúdo do cliente)
+			return nil, graphOverviewOut{}, fmt.Errorf("organização suspensa — regularize o billing pra continuar")
+		}
+		if !allowRead(ctx) {
+			return nil, graphOverviewOut{}, fmt.Errorf("rate limit de leitura atingido — tente novamente em instantes")
+		}
 		ov, err := graph.GetOverview(ctx, d.Pool, orgID, in.TopN)
 		if err != nil {
 			return nil, graphOverviewOut{}, fmt.Errorf("graph_overview: %w", err)
@@ -698,13 +757,31 @@ func newServer(d Deps) *mcpsdk.Server {
 	return s
 }
 
+// maxMCPBodyBytes limita o tamanho do corpo HTTP aceito por /v1/mcp — NEX-001:
+// o transporte streamable do SDK MCP lê o body JSON-RPC inteiro na RAM antes de
+// qualquer validação de tamanho (json.Decode não tinha nenhum http.MaxBytesReader
+// no repo inteiro). Aplicado explicitamente aqui (não só via middleware do
+// router HTTP) porque o mux.Handle("/v1/mcp", ...) delega pro SDK, que faz seu
+// próprio parsing de body — não dá pra confiar só num decode em internal/api.
+// Mesmo nome de env do cap HTTP (internal/api/bodylimit.go), consistente pro
+// operador configurar um único valor: NEXUS_MAX_REQUEST_BODY_BYTES (default 8 MiB).
+var maxMCPBodyBytes = int64(envInt("NEXUS_MAX_REQUEST_BODY_BYTES", 8*1024*1024))
+
 // Handler retorna o http.Handler MCP (streamable HTTP, stateless). Monte atrás
 // do auth.Middleware: cada request HTTP carrega o Bearer token, que resolve a
 // org no contexto consumido pelos tools.
 func Handler(d Deps) http.Handler {
 	srv := newServer(d)
-	return mcpsdk.NewStreamableHTTPHandler(
+	inner := mcpsdk.NewStreamableHTTPHandler(
 		func(*http.Request) *mcpsdk.Server { return srv },
 		&mcpsdk.StreamableHTTPOptions{Stateless: true},
 	)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// http.MaxBytesReader escreve o erro no ResponseWriter só quando o handler
+		// downstream tenta ler ALÉM do limite — o SDK MCP trata isso como um erro
+		// de leitura normal (sem panic; o middleware.Recoverer do router HTTP é a
+		// rede de segurança adicional caso algum path não trate).
+		r.Body = http.MaxBytesReader(w, r.Body, maxMCPBodyBytes)
+		inner.ServeHTTP(w, r)
+	})
 }

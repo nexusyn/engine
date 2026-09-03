@@ -65,12 +65,13 @@ func TestHasWrite(t *testing.T) {
 	}
 }
 
-// clampSearchLimit: piso 5, teto 100 — o teto barra limit gigante que faria a
-// busca vetorial/rerank explodir (DoS de custo). (R1)
+// clampSearchLimit: default 20 (sweet spot validado, = /v1/query e LME_LIMIT do
+// bench), teto 100 — o teto barra limit gigante que faria a busca vetorial/rerank
+// explodir (DoS de custo). (R1)
 func TestClampSearchLimit(t *testing.T) {
 	cases := map[int]int{
-		0:       5,   // default
-		-7:      5,   // negativo → default
+		0:       20,  // default
+		-7:      20,  // negativo → default
 		1:       1,   // dentro da faixa
 		50:      50,  // dentro da faixa
 		100:     100, // no teto

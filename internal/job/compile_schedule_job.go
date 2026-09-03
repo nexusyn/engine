@@ -231,7 +231,7 @@ func gatherNewSources(ctx context.Context, pool *pgxpool.Pool, orgID int64, sinc
 	maxTS := since
 	err := tenant.RunWithTenantReadOnly(ctx, pool, orgID, func(tx pgx.Tx) error {
 		rows, e := tx.Query(ctx,
-			`SELECT id, title, content, created_at FROM pages
+			`SELECT id, title, content, COALESCE(project, ''), created_at FROM pages
 			 WHERE organization_id = $1 AND valid_to IS NULL
 			   AND domain IN ('memory','knowledge') AND created_at > $2
 			 ORDER BY created_at ASC LIMIT $3`, orgID, since, limit)
@@ -241,12 +241,12 @@ func gatherNewSources(ctx context.Context, pool *pgxpool.Pool, orgID int64, sinc
 		defer rows.Close()
 		for rows.Next() {
 			var id int64
-			var t, c string
+			var t, c, proj string
 			var ts time.Time
-			if e := rows.Scan(&id, &t, &c, &ts); e != nil {
+			if e := rows.Scan(&id, &t, &c, &proj, &ts); e != nil {
 				return e
 			}
-			docs = append(docs, compile.Doc{ID: id, Title: t, Content: c})
+			docs = append(docs, compile.Doc{ID: id, Title: t, Content: c, Project: proj})
 			if ts.After(maxTS) {
 				maxTS = ts
 			}

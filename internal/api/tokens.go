@@ -95,11 +95,9 @@ func TokenCreateHandler(pool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 		var req createTokenReq
-		if derr := json.NewDecoder(r.Body).Decode(&req); derr != nil {
-			writeError(w, http.StatusBadRequest, "invalid json: "+derr.Error())
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
-		defer func() { _ = r.Body.Close() }()
 		if req.Name == "" {
 			req.Name = "dashboard"
 		}

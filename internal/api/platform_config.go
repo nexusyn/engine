@@ -58,7 +58,14 @@ func validateBaseURL(raw string) error {
 	}
 	host := strings.ToLower(u.Hostname())
 	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+		// Link-local (unicast 169.254.0.0/16 + fe80::/10, e multicast) NUNCA é
+		// permitido, mesmo dentro da exceção self-hosted abaixo — é a faixa do
+		// metadata service (169.254.169.254 na AWS/GCP/Azure). Permitir aqui vira
+		// SSRF pra credenciais de cloud via POST /v1/admin/model-config/test.
+		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return fmt.Errorf("base_url: IP link-local não permitido (%s)", host)
+		}
+		if ip.IsLoopback() || ip.IsPrivate() {
 			return nil // self-hosted interno
 		}
 		return fmt.Errorf("base_url: IP público não permitido (%s)", host)
@@ -196,11 +203,9 @@ func PlatformModelConfigPutHandler(pool *pgxpool.Pool, cipher *secret.Cipher) ht
 			return
 		}
 		var req platformConfigPutRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
-		defer func() { _ = r.Body.Close() }()
 		if !platformconfig.ValidStage(req.Stage) {
 			writeError(w, http.StatusBadRequest, "stage inválido (generation|extraction|embed|rerank)")
 			return
@@ -250,11 +255,9 @@ type platformConfigTestResponse struct {
 func PlatformModelConfigTestHandler(pool *pgxpool.Pool, cipher *secret.Cipher, cfg config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req platformConfigTestRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
-		defer func() { _ = r.Body.Close() }()
 		if !platformconfig.ValidStage(req.Stage) {
 			writeError(w, http.StatusBadRequest, "stage inválido")
 			return

@@ -13,6 +13,7 @@ func TestPageFilter(t *testing.T) {
 	cases := []struct {
 		name      string
 		domain    string
+		project   string
 		q         string
 		alias     string
 		wantWhere string
@@ -49,10 +50,25 @@ func TestPageFilter(t *testing.T) {
 			wantWhere: "p.organization_id = $1 AND p.valid_to IS NULL AND p.domain = $2 AND (p.title ILIKE $3 OR p.content ILIKE $3)",
 			wantArgs:  []any{org, "lesson", "%rerank%"},
 		},
+		{
+			name:      "project (estrito — browse/export, sem incluir globais)",
+			project:   "nexusyn",
+			wantWhere: "organization_id = $1 AND valid_to IS NULL AND project = $2",
+			wantArgs:  []any{org, "nexusyn"},
+		},
+		{
+			name:      "domain + project + q, alias p ($2 dom, $3 proj, $4 q)",
+			domain:    "memory",
+			project:   "reachyn",
+			q:         "deploy",
+			alias:     "p",
+			wantWhere: "p.organization_id = $1 AND p.valid_to IS NULL AND p.domain = $2 AND p.project = $3 AND (p.title ILIKE $4 OR p.content ILIKE $4)",
+			wantArgs:  []any{org, "memory", "reachyn", "%deploy%"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			where, args := pageFilter(org, tc.domain, tc.q, tc.alias)
+			where, args := pageFilter(org, tc.domain, tc.project, tc.q, tc.alias)
 			if where != tc.wantWhere {
 				t.Errorf("where:\n got %q\nwant %q", where, tc.wantWhere)
 			}

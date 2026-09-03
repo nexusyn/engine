@@ -1,0 +1,34 @@
+-- 0039_chunks_diskann_params.sql — TODO: chunks_embedding_diskann sem search_list_size/max_alpha
+--
+-- Achado (comparando com pages, 0003_pages.sql): o índice DiskANN de pages
+-- (pages_embedding_diskann) é criado com
+--   num_neighbors = 50, search_list_size = 100, max_alpha = 1.2
+-- O índice DiskANN de chunks (chunks_embedding_diskann, 0010_chunks.sql,
+-- bloco "Vector index condicional") só seta storage_layout, num_neighbors,
+-- num_dimensions e num_bits_per_dimension:
+--   num_neighbors = 50, num_dimensions = 1024, num_bits_per_dimension = 1
+-- search_list_size e max_alpha ficam no default do pgvectorscale
+-- (search_list_size=100 — igual a pages por coincidência do default;
+-- max_alpha=1.0 — DIVERGE do 1.2 usado em pages). max_alpha mais alto
+-- tende a melhorar recall às custas de mais tempo de build; não está claro
+-- se a omissão em chunks foi intencional ou descuido, dado que chunks é
+-- quem o retrieval de fato consulta (search opera em chunks, não em pages
+-- — ver comentário em 0010_chunks.sql).
+--
+-- TODO: se a decisão for igualar chunks a pages (max_alpha=1.2), NÃO dá pra
+-- fazer via ALTER INDEX — pgvectorscale não suporta alterar
+-- num_neighbors/search_list_size/max_alpha de um índice DiskANN já criado
+-- in-place; exige DROP + CREATE INDEX (idealmente CONCURRENTLY) do zero,
+-- ou seja, rebuild completo do índice vetorial de chunks (tabela maior que
+-- pages — 1 page vira N chunks). Isso é pesado e precisa de janela de
+-- manutenção em produção, confirmando antes a sintaxe exata suportada pela
+-- versão do pgvectorscale em uso. NÃO fazer essa alteração sem essa
+-- confirmação e sem autorização explícita — por isso esta migration é
+-- só DOCUMENTAÇÃO: não há nenhum statement executável abaixo, nenhuma
+-- mudança é aplicada ao banco.
+
+-- +goose Up
+-- (sem statements — achado documentado acima; ver TODO antes de agir)
+
+-- +goose Down
+-- (sem statements)

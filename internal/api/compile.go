@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -43,10 +45,23 @@ func CompileHandler(pool *pgxpool.Pool, provider llm.Provider) http.HandlerFunc 
 			return
 		}
 
-		// Alvos: body ou default os 4 (wiki primeiro — mais pesado).
+		// Alvos: body ou default os 4 (wiki primeiro — mais pesado). Body é OPCIONAL
+		// aqui (decode error != body-too-large é ignorado por design, mantém os
+		// defaults) — mas o cap de tamanho SEMPRE se aplica (NEX-001): um body
+		// gigante ainda deve dar 413 limpo, não ser lido inteiro na RAM.
 		targets := []string{"wiki", "lesson", "decision", "error"}
 		var req compileRequest
-		if json.NewDecoder(r.Body).Decode(&req) == nil && len(req.Targets) > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+		if derr := json.NewDecoder(r.Body).Decode(&req); derr != nil {
+			var maxErr *http.MaxBytesError
+			if errors.As(derr, &maxErr) {
+				_ = r.Body.Close()
+				writeError(w, http.StatusRequestEntityTooLarge,
+					fmt.Sprintf("request body too large (max %d bytes)", maxErr.Limit))
+				return
+			}
+			// body ausente/JSON inválido → mantém os defaults (comportamento original)
+		} else if len(req.Targets) > 0 {
 			valid := []string{}
 			for _, t := range req.Targets {
 				if _, ok := compile.Targets[t]; ok {
@@ -63,7 +78,7 @@ func CompileHandler(pool *pgxpool.Pool, provider llm.Provider) http.HandlerFunc 
 		var sources []compile.Doc
 		err = tenant.RunWithTenantReadOnly(r.Context(), pool, orgID, func(tx pgx.Tx) error {
 			rows, e := tx.Query(r.Context(),
-				`SELECT id, title, content FROM pages
+				`SELECT id, title, content, COALESCE(project, '') FROM pages
 				 WHERE organization_id = $1 AND valid_to IS NULL
 				   AND domain IN ('memory','knowledge')
 				 ORDER BY created_at DESC LIMIT 200`, orgID)
@@ -73,11 +88,11 @@ func CompileHandler(pool *pgxpool.Pool, provider llm.Provider) http.HandlerFunc 
 			defer rows.Close()
 			for rows.Next() {
 				var id int64
-				var t, c string
-				if e := rows.Scan(&id, &t, &c); e != nil {
+				var t, c, proj string
+				if e := rows.Scan(&id, &t, &c, &proj); e != nil {
 					return e
 				}
-				sources = append(sources, compile.Doc{ID: id, Title: t, Content: c})
+				sources = append(sources, compile.Doc{ID: id, Title: t, Content: c, Project: proj})
 			}
 			return rows.Err()
 		})

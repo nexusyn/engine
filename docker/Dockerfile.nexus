@@ -8,7 +8,7 @@
 # ───── Stage 1: builder ─────
 # go.mod exige go >= 1.26.4 (bump de segurança 939f9ef) e o build roda com
 # GOTOOLCHAIN=local — a imagem TEM que acompanhar o go.mod.
-FROM golang:1.26-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 # Deps de build (git pra version resolution, ca-certs pra módulos privados se necessário)
 RUN apk add --no-cache git ca-certificates tzdata
@@ -28,11 +28,15 @@ COPY migrations/ migrations/
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILD_TIME=unknown
+# Build tags Go. Vazio = core (sem trava de licença; é o build OSS/SaaS).
+# "enterprise" = edição self-hosted com gate de licença (Enterprise 1/2).
+ARG GO_TAGS=""
 
 # Compila — CGO_ENABLED=0 garante binário 100% estático (sem libc)
 RUN CGO_ENABLED=0 GOOS=linux \
     go build \
       -trimpath \
+      -tags="${GO_TAGS}" \
       -ldflags="-s -w \
         -X main.version=${VERSION} \
         -X main.commit=${COMMIT} \
@@ -41,7 +45,7 @@ RUN CGO_ENABLED=0 GOOS=linux \
       ./cmd/nexus
 
 # ───── Stage 2: runtime ─────
-FROM alpine:3.21
+FROM alpine:3.24
 
 # CA certs pra HTTPS calls a providers (Voyage, Gemini, etc.)
 # tzdata pra parsing correto de timestamps temporal-reasoning

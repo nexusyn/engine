@@ -22,6 +22,9 @@ type IngestRequest struct {
 	Title   string `json:"title"`
 	Content string `json:"content"`
 	Domain  string `json:"domain,omitempty"`
+	// Project = segmento de projeto dentro da org (ex: nexusyn/reachyn). Opcional;
+	// vazio = global/geral. Sanitizado (lowercase/kebab) antes de persistir.
+	Project string `json:"project,omitempty"`
 	// Agent = slug da IA que está salvando (claude/gemini/cursor/minimax/…),
 	// find-or-create na org. É como a memória fica amarrada à IA fonte.
 	Agent string `json:"agent,omitempty"`
@@ -64,11 +67,9 @@ func IngestHandler(pool *pgxpool.Pool) http.HandlerFunc {
 		}
 
 		var req IngestRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
-		defer func() { _ = r.Body.Close() }()
 
 		// Validation mínima
 		if req.Content == "" {
@@ -114,6 +115,7 @@ func IngestHandler(pool *pgxpool.Pool) http.HandlerFunc {
 			Title:          req.Title,
 			Content:        req.Content,
 			Domain:         req.Domain,
+			Project:        metering.SanitizeProjectSlug(req.Project),
 			Metadata:       req.Metadata,
 		}
 

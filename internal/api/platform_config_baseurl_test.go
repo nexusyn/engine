@@ -32,3 +32,21 @@ func TestValidateBaseURL_BloqueiaHostPublicoArbitrario(t *testing.T) {
 		}
 	}
 }
+
+// TestValidateBaseURL_BloqueiaLinkLocal — NEX-003: link-local NUNCA pode passar,
+// mesmo dentro da exceção self-hosted (loopback/privado). 169.254.169.254 é o
+// metadata service da AWS/GCP/Azure — permitir aqui vira SSRF pra credenciais de
+// cloud via POST /v1/admin/model-config/test.
+func TestValidateBaseURL_BloqueiaLinkLocal(t *testing.T) {
+	bad := []string{
+		"http://169.254.169.254/latest/meta-data/", // AWS/GCP/Azure metadata
+		"http://169.254.170.2/v2/credentials",      // ECS task metadata
+		"http://[fe80::1]:80",                      // IPv6 link-local unicast
+		"http://224.0.0.1",                         // multicast (não link-local unicast, mas correlato)
+	}
+	for _, u := range bad {
+		if err := validateBaseURL(u); err == nil {
+			t.Errorf("validateBaseURL(%q) deveria BLOQUEAR (link-local/SSRF), mas passou", u)
+		}
+	}
+}

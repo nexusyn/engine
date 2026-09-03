@@ -50,6 +50,56 @@ func TestDetectDateAnchor_RelativeAgo(t *testing.T) {
 	}
 }
 
+func TestDetectDateAnchor_WordNumberAgo(t *testing.T) {
+	now := time.Date(2026, 5, 23, 0, 0, 0, 0, time.UTC)
+	// "four weeks ago" = -28 dias (antes virava âncora vazia/hoje)
+	got := DetectDateAnchor("the business milestone I mentioned four weeks ago", now)
+	want := time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestDetectDateAnchor_ArticleWeekAgo(t *testing.T) {
+	now := time.Date(2026, 5, 23, 0, 0, 0, 0, time.UTC)
+	got := DetectDateAnchor("Which book did I finish a week ago?", now)
+	want := time.Date(2026, 5, 16, 0, 0, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestDetectDateAnchor_LastWeek(t *testing.T) {
+	now := time.Date(2026, 5, 23, 0, 0, 0, 0, time.UTC)
+	got := DetectDateAnchor("What did I buy last week?", now)
+	want := time.Date(2026, 5, 16, 0, 0, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestDetectDateAnchor_LastWeekdayEN(t *testing.T) {
+	now := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
+	got := DetectDateAnchor("What artist did I start listening to last Friday?", now)
+	if got.IsZero() {
+		t.Fatal("esperava uma data para 'last Friday'")
+	}
+	if got.Weekday() != time.Friday {
+		t.Errorf("esperava sexta-feira, got %v (%v)", got.Weekday(), got)
+	}
+	if !got.Before(now) || now.Sub(got) > 8*24*time.Hour {
+		t.Errorf("esperava nos últimos 7 dias, got %v", got)
+	}
+}
+
+func TestDetectDateAnchor_PtWeekdayPassada(t *testing.T) {
+	now := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
+	got := DetectDateAnchor("o que eu fiz na sexta passada?", now)
+	if got.IsZero() || got.Weekday() != time.Friday {
+		t.Errorf("esperava uma sexta-feira passada, got %v", got)
+	}
+}
+
 func TestDetectDateAnchor_NoMatch(t *testing.T) {
 	now := time.Date(2026, 5, 23, 0, 0, 0, 0, time.UTC)
 	if got := DetectDateAnchor("What does Luciano drink?", now); !got.IsZero() {
@@ -130,5 +180,23 @@ func TestApplyDateAnchorBoost_FarChunkBarelyBoosted(t *testing.T) {
 	}
 	if got[1] < 1.0 {
 		t.Errorf("boost should not decrease score, got %f", got[1])
+	}
+}
+
+func TestApplyDateAnchorBoost_WeakOnAnchorBeatsStrongFar(t *testing.T) {
+	// Caso temporal: a resposta certa está NA data da âncora mas é semanticamente
+	// fraca (RRF baixo); um chunk irrelevante porém forte está 30 dias longe.
+	// Com maxBoost=4.0 o chunk da data exata DEVE superá-lo — com o antigo 1.0 NÃO
+	// superava (é exatamente a razão de subir o boost: recall temporal).
+	anchor := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
+	scores := map[int64]float64{1: 0.10, 2: 0.25}
+	sd := map[int64]time.Time{1: anchor, 2: anchor.AddDate(0, 0, -30)}
+	got := ApplyDateAnchorBoost(scores, sd, anchor, 4.0, 7.0)
+	if got[1] <= got[2] {
+		t.Errorf("fraco-na-âncora (%.3f) deveria superar forte-distante (%.3f)", got[1], got[2])
+	}
+	old := ApplyDateAnchorBoost(scores, sd, anchor, 1.0, 7.0)
+	if old[1] > old[2] {
+		t.Errorf("com maxBoost=1.0 o fraco NÃO deveria superar — teste perderia o sentido")
 	}
 }

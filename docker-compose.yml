@@ -1,0 +1,58 @@
+# Local quickstart: Postgres (pgvector) + Nexusyn engine API + background worker.
+# Copy .env.example to .env and configure your model provider keys.
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: ${ENGINE_DB_PASSWORD:-nexus}
+      POSTGRES_DB: nexus
+      APP_USER_PASSWORD: ${APP_USER_PASSWORD:-app-secret}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init.sh:/docker-entrypoint-initdb.d/10-create-nexus-app.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    build: .
+    command: ["migrate", "up"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://nexus:${ENGINE_DB_PASSWORD:-nexus}@postgres:5432/nexus
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build: .
+    command: ["serve"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://nexus_app:${APP_USER_PASSWORD:-app-secret}@postgres:5432/nexus
+      ADMIN_DATABASE_URL: postgres://nexus:${ENGINE_DB_PASSWORD:-nexus}@postgres:5432/nexus
+      HTTP_PORT: "8044"
+    ports:
+      - "8044:8044"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build: .
+    command: ["serve", "--worker"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://nexus_app:${APP_USER_PASSWORD:-app-secret}@postgres:5432/nexus
+      ADMIN_DATABASE_URL: postgres://nexus:${ENGINE_DB_PASSWORD:-nexus}@postgres:5432/nexus
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:

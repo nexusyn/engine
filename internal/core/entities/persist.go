@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -97,27 +99,35 @@ func Persist(ctx context.Context, tx pgx.Tx, orgID, pageID int64, e *Extracted) 
 			continue // referência a entity não-persistida (sanitize falhou em pegar)
 		}
 
+		// Valid time (Módulo C): datas extraídas pelo LLM (ISO 8601) viram valid_from/valid_to.
+		validAt := parseValidTime(edge.ValidAt)
+		invalidAt := parseValidTime(edge.InvalidAt)
+
 		if IsOneToOne(edge.Kind) {
 			// Invalida edges antigas (mesma from+kind, to diferente, ainda válidas)
 			tag, err := tx.Exec(ctx, `
 				UPDATE edges
-				SET valid_to = now()
+				SET valid_to = COALESCE($5, now())
 				WHERE organization_id = $1
 				  AND from_entity_id = $2
 				  AND kind = $3
 				  AND to_entity_id <> $4
 				  AND valid_to IS NULL
-			`, orgID, fromID, edge.Kind, toID)
+			`, orgID, fromID, edge.Kind, toID, validAt)
 			if err != nil {
 				return stats, fmt.Errorf("entities persist: supersede %s→%s: %w", edge.FromName, edge.ToName, err)
 			}
 			stats.EdgesSuperseded += int(tag.RowsAffected())
 		}
 
+		// Normaliza no ponto único de escrita: garante que TODA edge respeita
+		// edges_confidence_chk, independente da origem (LLM, import, teste). O
+		// extractor já normaliza no fluxo do LLM; aqui é a defesa final.
+		conf, confScore := normalizeConfidence(edge.Confidence, edge.ConfidenceScore)
 		_, err := tx.Exec(ctx, `
-			INSERT INTO edges (organization_id, from_entity_id, to_entity_id, kind, weight, source_page_id, confidence, confidence_score)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		`, orgID, fromID, toID, edge.Kind, edge.Weight, pageID, edge.Confidence, edge.ConfidenceScore)
+			INSERT INTO edges (organization_id, from_entity_id, to_entity_id, kind, weight, source_page_id, confidence, confidence_score, valid_from, valid_to)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, now()), $10)
+		`, orgID, fromID, toID, edge.Kind, edge.Weight, pageID, conf, confScore, validAt, invalidAt)
 		if err != nil {
 			return stats, fmt.Errorf("entities persist: insert edge %s→%s: %w", edge.FromName, edge.ToName, err)
 		}
@@ -208,4 +218,19 @@ func RunInTenantTx(ctx context.Context, pool *pgxpool.Pool, orgID, pageID int64,
 		return MarkPageProcessed(ctx, tx, pageID)
 	})
 	return stats, err
+}
+
+// parseValidTime parseia uma data ISO 8601 (date-only ou RFC3339) vinda do LLM pra
+// valid time. Vazio/inválido → nil (caller usa now() pra valid_from, NULL pra valid_to).
+func parseValidTime(s string) *time.Time {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return &t
+		}
+	}
+	return nil
 }

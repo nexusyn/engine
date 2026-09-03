@@ -97,6 +97,14 @@ func SanitizeAgentSlug(s string) string {
 	return s
 }
 
+// SanitizeProjectSlug normaliza o slug de PROJETO (memória por projeto, Design A).
+// Mesmo formato canônico do agent (lowercase, kebab, ≤64); texto livre por org (sem
+// allowlist, ao contrário de domain). Vazio/inválido → "" → pages.project fica NULL
+// (= global/geral).
+func SanitizeProjectSlug(s string) string {
+	return SanitizeAgentSlug(s)
+}
+
 func ResolveAgent(ctx context.Context, pool *pgxpool.Pool, orgID int64, slug string) (int64, error) {
 	slug = SanitizeAgentSlug(slug)
 	if slug == "" {

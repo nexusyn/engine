@@ -1,6 +1,6 @@
-title = "Nexusyn engine — gitleaks"
+title = "Nexusyn engine — gitleaks config"
 [extend]
 useDefault = true
 [allowlist]
-description = "Fixtures de teste do redator (secrets sintéticos para testar o mascaramento)"
+description = "Fixtures de teste com strings sintéticas"
 paths = ['''internal/core/redact/.*_test\.go''']

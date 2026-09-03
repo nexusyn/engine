@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -33,11 +32,9 @@ type AdminCreateOrgResponse struct {
 func AdminCreateOrgHandler(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req AdminCreateOrgRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
-		defer func() { _ = r.Body.Close() }()
 
 		req.Slug = strings.ToLower(strings.TrimSpace(req.Slug))
 		req.Name = strings.TrimSpace(req.Name)

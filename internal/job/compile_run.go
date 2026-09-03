@@ -40,54 +40,61 @@ func RunCompile(ctx context.Context, pool *pgxpool.Pool, insertClient *river.Cli
 	counts := map[string]int{}
 	var failures []string
 
-	for _, tgtName := range targets {
-		tgt, ok := compile.Targets[tgtName]
-		if !ok {
-			continue
-		}
-		for start := 0; start < len(sources); start += compileBatchSize {
-			end := start + compileBatchSize
-			if end > len(sources) {
-				end = len(sources)
-			}
-			batch := sources[start:end]
-
-			existing, _ := gatherDomainDocs(ctx, pool, orgID, tgt.Domain, 20)
-
-			// Pacing: respira entre lotes — dá fôlego pro MiniMax acompanhar.
-			time.Sleep(3 * time.Second)
-
-			// Retry com backoff (30s, 60s): throttle é transitório.
-			var res compile.Result
-			var cerr error
-			for attempt := 0; attempt < 3; attempt++ {
-				if attempt > 0 {
-					time.Sleep(time.Duration(attempt) * 30 * time.Second)
-				}
-				cctx, c := context.WithTimeout(ctx, 240*time.Second)
-				res, cerr = compile.Synthesize(cctx, provider, tgt.System, batch, existing)
-				c()
-				if cerr == nil {
-					break
-				}
-			}
-			if cerr != nil {
-				failures = append(failures, fmt.Sprintf("%s/lote%d: %v", tgtName, start/compileBatchSize, cerr))
+	// Compila POR PROJETO: agrupa as fontes pelo seu project e roda o pipeline
+	// separado por grupo. Assim cada página derivada herda o project das suas
+	// memórias-fonte (proveniência) — memórias globais (project "") geram derivados
+	// globais. Sem isto o derivado nascia sempre global (project NULL) e vazava em
+	// qualquer filtro `project=X` (que traz "projeto X + globais").
+	for _, grp := range groupByProject(sources) {
+		for _, tgtName := range targets {
+			tgt, ok := compile.Targets[tgtName]
+			if !ok {
 				continue
 			}
-			// Proveniência: liga as páginas compiladas às memórias-fonte do lote.
-			batchIDs := make([]int64, 0, len(batch))
-			for _, d := range batch {
-				if d.ID > 0 {
-					batchIDs = append(batchIDs, d.ID)
+			for start := 0; start < len(grp.docs); start += compileBatchSize {
+				end := start + compileBatchSize
+				if end > len(grp.docs) {
+					end = len(grp.docs)
 				}
+				batch := grp.docs[start:end]
+
+				existing, _ := gatherDomainDocs(ctx, pool, orgID, tgt.Domain, 20)
+
+				// Pacing: respira entre lotes — dá fôlego pro MiniMax acompanhar.
+				time.Sleep(3 * time.Second)
+
+				// Retry com backoff (30s, 60s): throttle é transitório.
+				var res compile.Result
+				var cerr error
+				for attempt := 0; attempt < 3; attempt++ {
+					if attempt > 0 {
+						time.Sleep(time.Duration(attempt) * 30 * time.Second)
+					}
+					cctx, c := context.WithTimeout(ctx, 240*time.Second)
+					res, cerr = compile.Synthesize(cctx, provider, tgt.System, batch, existing)
+					c()
+					if cerr == nil {
+						break
+					}
+				}
+				if cerr != nil {
+					failures = append(failures, fmt.Sprintf("%s/%s/lote%d: %v", labelProject(grp.project), tgtName, start/compileBatchSize, cerr))
+					continue
+				}
+				// Proveniência: liga as páginas compiladas às memórias-fonte do lote.
+				batchIDs := make([]int64, 0, len(batch))
+				for _, d := range batch {
+					if d.ID > 0 {
+						batchIDs = append(batchIDs, d.ID)
+					}
+				}
+				saved, perr := persistPages(ctx, pool, insertClient, orgID, agentID, tgt.Domain, grp.project, res.Pages, batchIDs)
+				if perr != nil {
+					failures = append(failures, fmt.Sprintf("%s/%s/lote%d persist: %v", labelProject(grp.project), tgtName, start/compileBatchSize, perr))
+					continue
+				}
+				counts[tgt.Domain] += saved
 			}
-			saved, perr := persistPages(ctx, pool, insertClient, orgID, agentID, tgt.Domain, res.Pages, batchIDs)
-			if perr != nil {
-				failures = append(failures, fmt.Sprintf("%s/lote%d persist: %v", tgtName, start/compileBatchSize, perr))
-				continue
-			}
-			counts[tgt.Domain] += saved
 		}
 	}
 
@@ -96,6 +103,39 @@ func RunCompile(ctx context.Context, pool *pgxpool.Pool, insertClient *river.Cli
 		_ = EnqueueEmbedBatch(ctx, insertClient, 1*time.Second)
 	}
 	return counts, failures
+}
+
+// projectGroup são as fontes de um mesmo project, compiladas juntas.
+type projectGroup struct {
+	project string
+	docs    []compile.Doc
+}
+
+// groupByProject particiona as fontes por project preservando a ordem de primeira
+// aparição de cada project (determinístico — sem depender da ordem de iteração de
+// map). Fontes com project "" formam o grupo global. É a peça que dá a cada
+// derivado o project das suas memórias-fonte (proveniência).
+func groupByProject(sources []compile.Doc) []projectGroup {
+	idx := map[string]int{}
+	var groups []projectGroup
+	for _, d := range sources {
+		i, ok := idx[d.Project]
+		if !ok {
+			i = len(groups)
+			idx[d.Project] = i
+			groups = append(groups, projectGroup{project: d.Project})
+		}
+		groups[i].docs = append(groups[i].docs, d)
+	}
+	return groups
+}
+
+// labelProject rotula o grupo global nas mensagens de falha.
+func labelProject(p string) string {
+	if p == "" {
+		return "(global)"
+	}
+	return p
 }
 
 // gatherDomainDocs lê até `limit` páginas vivas de um domínio (pra integração).
@@ -122,10 +162,15 @@ func gatherDomainDocs(ctx context.Context, pool *pgxpool.Pool, orgID int64, doma
 	return out, err
 }
 
-// persistPages faz UPSERT por slug das páginas no domínio + re-chunk. Tx própria
-// (lote isolado). Retorna quantas páginas foram gravadas. Enfileira extract de
-// entidades pra ligar as páginas geradas ao grafo.
-func persistPages(ctx context.Context, pool *pgxpool.Pool, insertClient *river.Client[pgx.Tx], orgID, agentID int64, domain string, pages []compile.Page, sourceIDs []int64) (int, error) {
+// persistPages faz UPSERT por (slug, project) das páginas no domínio + re-chunk.
+// Tx própria (lote isolado). Retorna quantas páginas foram gravadas. Enfileira
+// extract de entidades pra ligar as páginas geradas ao grafo.
+//
+// `project` é o segmento das memórias-fonte deste lote ("" = global): grava no
+// derivado e ESCOPA o dedup (UPSERT-por-slug e near-dup de conteúdo) por project,
+// pra que projetos distintos com o mesmo slug/conteúdo NÃO colidam nem sobrescrevam
+// um ao outro.
+func persistPages(ctx context.Context, pool *pgxpool.Pool, insertClient *river.Client[pgx.Tx], orgID, agentID int64, domain, project string, pages []compile.Page, sourceIDs []int64) (int, error) {
 	if len(pages) == 0 {
 		return 0, nil
 	}
@@ -159,15 +204,15 @@ func persistPages(ctx context.Context, pool *pgxpool.Pool, insertClient *river.C
 			var pageID int64
 			ct, e := tx.Exec(ctx,
 				`UPDATE pages SET title = $3, content = $4, source_type = 'compiled', agent_id = NULLIF($6, 0), metadata = $7::jsonb
-				 WHERE organization_id = $1 AND slug = $2 AND domain = $5 AND valid_to IS NULL`,
-				orgID, slug, title, p.Content, domain, agentID, meta)
+				 WHERE organization_id = $1 AND slug = $2 AND domain = $5 AND project IS NOT DISTINCT FROM NULLIF($8, '') AND valid_to IS NULL`,
+				orgID, slug, title, p.Content, domain, agentID, meta, project)
 			if e != nil {
 				return e
 			}
 			if ct.RowsAffected() > 0 {
 				if e := tx.QueryRow(ctx,
-					`SELECT id FROM pages WHERE organization_id = $1 AND slug = $2 AND domain = $3 AND valid_to IS NULL`,
-					orgID, slug, domain).Scan(&pageID); e != nil {
+					`SELECT id FROM pages WHERE organization_id = $1 AND slug = $2 AND domain = $3 AND project IS NOT DISTINCT FROM NULLIF($4, '') AND valid_to IS NULL`,
+					orgID, slug, domain, project).Scan(&pageID); e != nil {
 					return e
 				}
 				if _, e := tx.Exec(ctx, `DELETE FROM chunks WHERE page_id = $1 AND organization_id = $2`, pageID, orgID); e != nil {
@@ -177,10 +222,10 @@ func persistPages(ctx context.Context, pool *pgxpool.Pool, insertClient *river.C
 				var dupID int64
 				derr := tx.QueryRow(ctx,
 					`SELECT id FROM pages
-					 WHERE organization_id = $1 AND domain = $2 AND valid_to IS NULL
+					 WHERE organization_id = $1 AND domain = $2 AND project IS NOT DISTINCT FROM NULLIF($5, '') AND valid_to IS NULL
 					   AND similarity(left(content, 500), left($3, 500)) >= $4
 					 ORDER BY similarity(left(content, 500), left($3, 500)) DESC LIMIT 1`,
-					orgID, domain, p.Content, compileDedupThreshold).Scan(&dupID)
+					orgID, domain, p.Content, compileDedupThreshold, project).Scan(&dupID)
 				switch {
 				case derr == nil:
 					// near-dup de outra rodada (slug derivou) → atualiza ela.
@@ -195,9 +240,9 @@ func persistPages(ctx context.Context, pool *pgxpool.Pool, insertClient *river.C
 					pageID = dupID
 				case errors.Is(derr, pgx.ErrNoRows):
 					if e := tx.QueryRow(ctx,
-						`INSERT INTO pages (organization_id, agent_id, slug, title, content, domain, source_type, metadata)
-						 VALUES ($1, NULLIF($2, 0), $3, $4, $5, $6, 'compiled', $7::jsonb) RETURNING id`,
-						orgID, agentID, slug, title, p.Content, domain, meta).Scan(&pageID); e != nil {
+						`INSERT INTO pages (organization_id, agent_id, slug, title, content, domain, project, source_type, metadata)
+						 VALUES ($1, NULLIF($2, 0), $3, $4, $5, $6, NULLIF($7, ''), 'compiled', $8::jsonb) RETURNING id`,
+						orgID, agentID, slug, title, p.Content, domain, project, meta).Scan(&pageID); e != nil {
 						return e
 					}
 				default:

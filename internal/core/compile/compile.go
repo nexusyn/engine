@@ -34,6 +34,7 @@ type Doc struct {
 	ID      int64 // page de origem (proveniência das páginas compiladas)
 	Title   string
 	Content string
+	Project string // segmento de projeto da fonte na org; "" = global. Propaga para o derivado.
 }
 
 // Page é uma página sintetizada pelo LLM.

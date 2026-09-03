@@ -85,10 +85,10 @@ func NewInsertOnlyClient(pool *pgxpool.Pool) (*river.Client[pgx.Tx], error) {
 	return client, nil
 }
 
-// RegisterCoreWorkers anexa workers que não precisam de providers externos.
-// Ponto único pra adicionar workers core — mantém wiring centralizado.
-func RegisterCoreWorkers(workers *river.Workers, pool *pgxpool.Pool) error {
-	if err := river.AddWorkerSafely(workers, NewIngestWorker(pool)); err != nil {
+// RegisterCoreWorkers anexa os workers core. resolver é opcional (pode ser nil):
+// habilita o dedup semântico do IngestWorker quando o embed está configurado.
+func RegisterCoreWorkers(workers *river.Workers, pool *pgxpool.Pool, resolver embedResolver) error {
+	if err := river.AddWorkerSafely(workers, NewIngestWorker(pool, resolver)); err != nil {
 		return fmt.Errorf("register IngestWorker: %w", err)
 	}
 	return nil

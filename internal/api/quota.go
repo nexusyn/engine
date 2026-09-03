@@ -41,6 +41,15 @@ func checkQueryQuota(w http.ResponseWriter, r *http.Request, pool *pgxpool.Pool,
 	if !requireOrgActive(w, r, pool, orgID) { // AUD-010: org suspensa → 403 (independe do enforce)
 		return false
 	}
+	// Baseline de throughput SEMPRE ativo (independente de NEXUS_ENFORCE_LIMITS) —
+	// espelha o throttle de mutação do MCP (allowMutation). Sem isto, um token
+	// válido saturava /v1/query, /v1/search e /v1/query/stream sem NENHUM teto
+	// enquanto o billing enforcement estiver OFF (caso de prod hoje).
+	if !allowBaselineRead(orgID) {
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusTooManyRequests, "rate limit exceeded — slow down or try again shortly")
+		return false
+	}
 	quota := metering.CheckAndIncrQuery(r.Context(), pool, orgID, metering.Enforced())
 	if !quota.Allowed {
 		writeError(w, http.StatusPaymentRequired, fmt.Sprintf(

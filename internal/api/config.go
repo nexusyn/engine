@@ -42,11 +42,9 @@ func ModelConfigPutHandler(pool *pgxpool.Pool) http.HandlerFunc {
 			return
 		}
 		var c orgconfig.ModelChoice
-		if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		if !decodeJSONBody(w, r, &c) {
 			return
 		}
-		defer func() { _ = r.Body.Close() }()
 		if err := orgconfig.Upsert(r.Context(), pool, orgID, c); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
