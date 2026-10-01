@@ -1,6 +1,6 @@
 # Binaries and build output
 bin/
-nexus
+/nexus
 *.exe
 *.dll
 *.so

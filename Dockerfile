@@ -26,8 +26,5 @@ COPY --from=builder /src/migrations /app/migrations
 USER nexus
 EXPOSE 8044
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["/usr/local/bin/nexus", "health-check"]
-
 ENTRYPOINT ["/usr/local/bin/nexus"]
-CMD ["serve"]
+CMD ["mcp"]
