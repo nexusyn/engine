@@ -18,11 +18,6 @@ import (
 	"github.com/nexusyn/engine/internal/tenant"
 )
 
-// compileBatchSize — fontes processadas por chamada de LLM. Pequeno de propósito:
-// JSON de saída grande trunca (limite de tokens) → parse falha. Lotes pequenos
-// mantêm cada saída dentro do MaxTokens.
-const compileBatchSize = 3
-
 // compileRequest — body opcional: quais alvos gerar. Default: os 4.
 type compileRequest struct {
 	Targets []string `json:"targets"`

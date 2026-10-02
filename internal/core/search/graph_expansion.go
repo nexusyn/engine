@@ -68,9 +68,9 @@ const (
 	// Menor que o entityMatchCap (8): a expansão amplifica, então poucos seeds
 	// de qualidade > muitos fracos.
 	graphSeedCap = 5
-	// graphSeedThreshold é a similaridade trigram mínima do seed (igual ao
+	// GraphSeedThreshold é a similaridade trigram mínima do seed (igual ao
 	// entity-match — mesma lógica de NL longa vs name curto).
-	graphSeedThreshold = 0.3
+	GraphSeedThreshold = 0.3
 	// graphMaxDepth é o nº de hops a partir do seed. 2 = vizinhos + vizinhos-de-
 	// vizinhos; além disso o sinal vira ruído.
 	graphMaxDepth = 2

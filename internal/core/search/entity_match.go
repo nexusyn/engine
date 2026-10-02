@@ -13,7 +13,7 @@ import (
 // atenuado). Substituem o boost FLAT 1.5× por um peso por-entidade que penaliza
 // entidades pouco discriminativas (alto grau no grafo).
 const (
-	// entityMatchThreshold é a similaridade trigram mínima entre name e query
+	// EntityMatchThreshold é a similaridade trigram mínima entre name e query
 	// pra a entidade contar como match. 0.3 (NÃO 0.5): similarity() compara a
 	// string INTEIRA, então uma pergunta NL longa ("How many tanks do I have,
 	// including the one I set up for my friend's kid?") tem sim trigram baixa
@@ -21,7 +21,7 @@ const (
 	// 0.5 sufocava o canal de recall de entidades justo nas queries de agregação
 	// multi-sessão que mais dependem dele (undercount 2 vs 3 tanques etc.). A
 	// disciplina de B vem da ATENUAÇÃO por grau + cap, não de um threshold alto.
-	entityMatchThreshold = 0.3
+	EntityMatchThreshold = 0.3
 
 	// entityMatchCap limita quantas entidades uma query injeta no canal. 8 (era
 	// 20) evita que uma query verbosa arraste dezenas de entidades fracas.
