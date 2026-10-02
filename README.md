@@ -15,6 +15,10 @@
 
 [Quickstart](#quickstart-docker-compose) • [MCP Integration](#first-class-mcp-integration) • [Architecture](#architecture) • [Benchmarks](#benchmarks) • [Cloud vs Self-Hosted](#self-hosted-vs-nexusyn-cloud) • [Documentation](https://nexusyn.ai/docs)
 
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="Nexusyn Terminal Demo" width="760" />
+</p>
+
 </div>
 
 ---
