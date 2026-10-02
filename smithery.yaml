@@ -2,19 +2,20 @@
 # https://smithery.ai/docs/config
 
 startCommand:
-  type: http
-  url: "https://api.nexusyn.ai/v1/mcp"
-  headers:
-    Authorization: "Bearer ${apiKey}"
+  type: stdio
   configSchema:
     type: object
-    required:
-      - apiKey
     properties:
       apiKey:
         type: string
-        title: "API Key"
-        description: "Your Nexusyn API Key from https://app.nexusyn.ai/dashboard"
+        title: "Nexusyn API Key"
+        description: "Your Nexusyn API Key from https://app.nexusyn.ai/dashboard (optional for local/self-host)"
+  commandFunction: |-
+    (config) => ({
+      command: "nexus",
+      args: ["mcp"],
+      env: config.apiKey ? { NEXUS_API_KEY: config.apiKey } : {}
+    })
 
 description: "Long-term persistent memory for AI agents with hybrid search (DiskANN + FTS), bi-temporal knowledge graph, and 81.1% LongMemEval accuracy."
 iconUrl: "https://nexusyn.ai/favicon.ico"
@@ -24,3 +25,4 @@ tags:
   - knowledge-graph
   - long-term-memory
   - context
+
