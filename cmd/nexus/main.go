@@ -334,7 +334,7 @@ func runServe(args []string) error {
 
 	// Middlewares globais
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	r.Use(middleware.RealIP) //nolint:staticcheck // RealIP is used behind reverse proxy (Traefik)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(cfg.HTTP.WriteTimeout))
 
@@ -536,7 +536,7 @@ func runHealthCheck() error {
 		port = "8044"
 	}
 	client := http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("http://localhost:%s/health", port))
+	resp, err := client.Get(fmt.Sprintf("http://localhost:%s/health", port)) // #nosec G704 -- localhost healthcheck only
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "health-check: %v\n", err)
 		return err

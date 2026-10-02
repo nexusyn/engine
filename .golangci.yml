@@ -49,6 +49,7 @@ linters:
       excludes:
         - G104  # errcheck já cobre
         - G115  # int conversion — manejaremos pontualmente
+        - G118  # intentional goroutine context detachments (background jobs, async token tracking)
 
   exclusions:
     rules:

@@ -185,7 +185,7 @@ func ContextHandler(pool *pgxpool.Pool) http.HandlerFunc {
 		if strings.EqualFold(r.URL.Query().Get("format"), "markdown") {
 			w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(pack))
+			_, _ = w.Write([]byte(pack)) // #nosec G705 -- text/markdown content type, not HTML
 			return
 		}
 
