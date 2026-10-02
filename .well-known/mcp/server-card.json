@@ -1,0 +1,145 @@
+{
+  "$schema": "https://smithery.ai/docs/config#server-card",
+  "serverInfo": {
+    "name": "nexusyn",
+    "version": "0.4.0",
+    "description": "Long-term persistent memory for AI agents with hybrid search (DiskANN + FTS), bi-temporal knowledge graph, and 81.1% LongMemEval accuracy."
+  },
+  "authentication": {
+    "required": true,
+    "schemes": ["bearer"]
+  },
+  "tools": [
+    {
+      "name": "add_memory",
+      "description": "Salva uma memória durável no NEXUS (fato, preferência, decisão, lição). Use quando o usuário compartilhar algo que vale lembrar entre sessões.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "texto da memória a salvar (fato, preferência, decisão, lição)"
+          },
+          "title": {
+            "type": "string",
+            "description": "título curto opcional"
+          },
+          "domain": {
+            "type": "string",
+            "description": "opcional, default 'memory'. 'memory' (observação bruta), 'knowledge' (referência curada), 'guideline' (padrão obrigatório) ou 'skill'"
+          },
+          "agent": {
+            "type": "string",
+            "description": "slug da IA que está salvando (ex: claude, cursor, gemini)"
+          },
+          "project": {
+            "type": "string",
+            "description": "slug do projeto (ex: nexusyn, reachyn) para segmentação"
+          }
+        },
+        "required": ["content"]
+      }
+    },
+    {
+      "name": "search_memory",
+      "description": "Busca na memória com recuperação híbrida (vetor DiskANN + busca textual BM25 + expansão de grafo) e síntese fundamentada com citação de fontes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "o que recuperar da memória do usuário"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "nº de fontes a considerar (default 20, máx 100)"
+          },
+          "project": {
+            "type": "string",
+            "description": "filtra a busca por projeto (traz o projeto + as memórias globais sem projeto); vazio = busca em tudo"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "get_guideline",
+      "description": "Retorna as guidelines vigentes da org (padrões obrigatórios) de forma determinística, sem busca. Chame no início pra saber o que é padrão antes de agir.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "get_related",
+      "description": "Explora o GRAFO de conhecimento: dada uma entidade/conceito (nome aproximado), retorna o que está conectado a ela em 1-2 hops com relação e distância.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "entity": {
+            "type": "string",
+            "description": "nome da entidade/conceito a explorar no grafo (match aproximado por similaridade)"
+          },
+          "max_depth": {
+            "type": "integer",
+            "description": "nº de hops a partir da entidade (default 2, máx 5)"
+          }
+        },
+        "required": ["entity"]
+      }
+    },
+    {
+      "name": "graph_overview",
+      "description": "Panorama do GRAFO de conhecimento da org: total de entidades/relações, distribuição por tipo, TEMAS CENTRAIS e CONECTORES.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "top_n": {
+            "type": "integer",
+            "description": "quantos itens em central/connectors (default 10, máx 50)"
+          }
+        }
+      }
+    },
+    {
+      "name": "update_memory",
+      "description": "Edita uma memória existente IN-PLACE (substitui o conteúdo e re-embeda). Use pra CORRIGIR memória desatualizada em vez de adicionar outra contradizendo.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "id da memória a editar (obtido via search_memory)"
+          },
+          "content": {
+            "type": "string",
+            "description": "novo conteúdo markdown completo (substitui o anterior)"
+          },
+          "title": {
+            "type": "string",
+            "description": "novo título (opcional; mantém o atual se vazio)"
+          },
+          "project": {
+            "type": "string",
+            "description": "reatribui o projeto (slug: nexusyn, reachyn…); vazio = mantém o projeto atual"
+          }
+        },
+        "required": ["id", "content"]
+      }
+    },
+    {
+      "name": "delete_memory",
+      "description": "Apaga uma memória da busca (soft-delete + remove os chunks do recall, mantendo histórico). Use pra remover memória errada/obsoleta.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "id da memória a apagar (obtido via search_memory)"
+          }
+        },
+        "required": ["id"]
+      }
+    }
+  ]
+}
