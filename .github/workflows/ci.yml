@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: "1.25"
+  GO_VERSION: "1.27"
 
 jobs:
   # ───── 1. Build + unit tests ─────
@@ -24,7 +24,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: 'go.mod'
           cache: true
 
       - name: go mod download
@@ -58,13 +58,13 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: 'go.mod'
           cache: true
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.5.0
+          version: latest
           args: --timeout=5m
 
   # ───── 3. Integration tests (Postgres real via testcontainers) ─────
@@ -77,7 +77,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: 'go.mod'
           cache: true
 
       - name: Integration tests
@@ -99,8 +99,8 @@ jobs:
       - name: Build nexus image
         run: docker build -f docker/Dockerfile.nexus -t nexus:ci .
 
-      - name: Build dashboard image
-        run: docker build -f docker/Dockerfile.dashboard -t nexus-dashboard:ci .
+      - name: Build standalone Dockerfile
+        run: docker build -f Dockerfile -t nexus-standalone:ci .
 
       - name: Image sizes
-        run: docker images | grep -E "^nexus(:|-)"
+        run: docker images | grep -E "^nexus"
