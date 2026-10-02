@@ -48,9 +48,9 @@ func TestImportHandler_EndToEnd(t *testing.T) {
 			{"title": "Válida com tudo", "content": "conteúdo 1", "domain": "memory",
 				"project": "nexusyn", "agent": "claude", "created_at": original},
 			{"title": "Knowledge sem agent", "content": "conteúdo 2", "domain": "knowledge"},
-			{"title": "Derivada", "content": "wiki compilada", "domain": "wiki"},   // pulada
-			{"title": "Vazia", "content": "   ", "domain": "memory"},               // pulada
-			{"title": "Domain desconhecido", "content": "x", "domain": "banana"},   // pulada
+			{"title": "Derivada", "content": "wiki compilada", "domain": "wiki"}, // pulada
+			{"title": "Vazia", "content": "   ", "domain": "memory"},             // pulada
+			{"title": "Domain desconhecido", "content": "x", "domain": "banana"}, // pulada
 		},
 	}
 	raw, err := json.Marshal(body)

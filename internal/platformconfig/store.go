@@ -9,6 +9,7 @@ package platformconfig
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -89,7 +90,7 @@ func Get(ctx context.Context, pool *pgxpool.Pool, c *secret.Cipher, stage string
 		SELECT stage, provider, model, base_url, api_key_enc
 		FROM platform_model_config WHERE stage = $1`, stage).
 		Scan(&cfg.Stage, &cfg.Provider, &cfg.Model, &cfg.BaseURL, &enc)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

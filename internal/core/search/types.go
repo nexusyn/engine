@@ -71,5 +71,5 @@ type Result struct {
 	Domain    string  `json:"domain"`
 	Project   string  `json:"project,omitempty"` // "" = global
 	Score     float64 `json:"score"`             // score final (RRF ou raw)
-	Source    string  `json:"source"` // "vector" | "fts" | "hybrid"
+	Source    string  `json:"source"`            // "vector" | "fts" | "hybrid"
 }

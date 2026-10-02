@@ -15,9 +15,9 @@ import (
 // + "Month DD[, YYYY]" + "DD de mês [de YYYY]". Mantido localmente pra evitar
 // dep cíclica (search → query → search via integration tests).
 var (
-	dateAnchorISO    = regexp.MustCompile(`\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b`)
-	dateAnchorEnMD   = regexp.MustCompile(`(?i)\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\s+(\d{1,2})(?:[,\s]+(\d{4}))?\b`)
-	dateAnchorPtDdM  = regexp.MustCompile(`(?i)\b(\d{1,2})\s+de\s+(janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)(?:\s+de\s+(\d{4}))?\b`)
+	dateAnchorISO   = regexp.MustCompile(`\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b`)
+	dateAnchorEnMD  = regexp.MustCompile(`(?i)\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\s+(\d{1,2})(?:[,\s]+(\d{4}))?\b`)
+	dateAnchorPtDdM = regexp.MustCompile(`(?i)\b(\d{1,2})\s+de\s+(janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)(?:\s+de\s+(\d{4}))?\b`)
 	// "N <unit> ago" — aceita dígito OU número por extenso (en/pt) e "a/an/um(a)".
 	dateAnchorRelAgo = regexp.MustCompile(`(?i)\b(\d+|an?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|um|uma|dois|duas|tr[êe]s|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)\s+(day|days|week|weeks|month|months|dia|dias|semana|semanas|m[eê]s|meses)\s+(ago|atr[áa]s)\b`)
 	// "last/past/this <weekday>" (en).

@@ -16,11 +16,11 @@ import (
 
 // Overview é o panorama do grafo de uma org.
 type Overview struct {
-	Entities   int           `json:"entities"`    // entidades current
-	Edges      int           `json:"edges"`       // arestas current
-	ByKind     []KindCount   `json:"by_kind"`     // entidades por kind
-	Central    []CentralNode `json:"central"`     // temas centrais (god-nodes, por grau)
-	Connectors []Connector   `json:"connectors"`  // conectores (ligam tipos distintos)
+	Entities   int           `json:"entities"`   // entidades current
+	Edges      int           `json:"edges"`      // arestas current
+	ByKind     []KindCount   `json:"by_kind"`    // entidades por kind
+	Central    []CentralNode `json:"central"`    // temas centrais (god-nodes, por grau)
+	Connectors []Connector   `json:"connectors"` // conectores (ligam tipos distintos)
 }
 
 type KindCount struct {
