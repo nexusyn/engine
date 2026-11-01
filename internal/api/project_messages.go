@@ -286,8 +286,8 @@ func renderInboxSection(msgs []ProjectMessage) string {
 		if agent == "" {
 			agent = "agente"
 		}
-		b.WriteString(fmt.Sprintf("- ⚠️ **[%s]** De: `%s` (%s) · Assunto: **%s**\n", from, agent, m.CreatedAt.UTC().Format("02/01 15:04"), m.Subject))
-		b.WriteString(fmt.Sprintf("  > %s\n\n", strings.ReplaceAll(strings.TrimSpace(m.Body), "\n", " ")))
+		fmt.Fprintf(&b, "- ⚠️ **[%s]** De: `%s` (%s) · Assunto: **%s**\n", from, agent, m.CreatedAt.UTC().Format("02/01 15:04"), m.Subject)
+		fmt.Fprintf(&b, "  > %s\n\n", strings.ReplaceAll(strings.TrimSpace(m.Body), "\n", " "))
 	}
 	return b.String()
 }

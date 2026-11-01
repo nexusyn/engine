@@ -33,7 +33,7 @@ func Fetch(ctx context.Context, pool *pgxpool.Pool, orgID int64) ([]Item, error)
 }
 
 // FetchScoped carrega as guidelines vigentes com distinção de projeto:
-// Se project estiver preenchido, carrega as guidelines globais (project IS NULL ou '')
+// Se project estiver preenchido, carrega as guidelines globais (project IS NULL ou ”)
 // E as guidelines específicas do projeto. Se project estiver vazio, carrega apenas as globais.
 func FetchScoped(ctx context.Context, pool *pgxpool.Pool, orgID int64, project string) ([]Item, error) {
 	if pool == nil {

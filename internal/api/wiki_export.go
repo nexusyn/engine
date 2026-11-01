@@ -111,9 +111,9 @@ func WikiExportHandler(pool *pgxpool.Pool) http.HandlerFunc {
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
 
 		gw := gzip.NewWriter(w)
-		defer gw.Close()
+		defer func() { _ = gw.Close() }()
 		tw := tar.NewWriter(gw)
-		defer tw.Close()
+		defer func() { _ = tw.Close() }()
 
 		for _, it := range items {
 			relPath := formatWikiPath(it)
@@ -157,13 +157,13 @@ func formatWikiPath(it wikiExportItem) string {
 func renderObsidianMarkdown(it wikiExportItem) string {
 	var b strings.Builder
 	b.WriteString("---\n")
-	b.WriteString(fmt.Sprintf("id: %d\n", it.ID))
-	b.WriteString(fmt.Sprintf("title: %q\n", it.Title))
-	b.WriteString(fmt.Sprintf("domain: %s\n", it.Domain))
+	fmt.Fprintf(&b, "id: %d\n", it.ID)
+	fmt.Fprintf(&b, "title: %q\n", it.Title)
+	fmt.Fprintf(&b, "domain: %s\n", it.Domain)
 	if it.Project != "" {
-		b.WriteString(fmt.Sprintf("project: %s\n", it.Project))
+		fmt.Fprintf(&b, "project: %s\n", it.Project)
 	}
-	b.WriteString(fmt.Sprintf("created_at: %s\n", it.CreatedAt.UTC().Format(time.RFC3339)))
+	fmt.Fprintf(&b, "created_at: %s\n", it.CreatedAt.UTC().Format(time.RFC3339))
 	b.WriteString("---\n\n")
 
 	b.WriteString("# " + strings.TrimSpace(it.Title) + "\n\n")

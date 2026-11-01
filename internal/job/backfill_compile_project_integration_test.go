@@ -62,10 +62,10 @@ func TestBackfillCompileProject(t *testing.T) {
 	mGlobal := insertSource(ctx, t, pool, org, "src-global", "")
 
 	// Derivados ANTIGOS (compiled, project NULL) com proveniências variadas.
-	dPuro := insertDerived(ctx, t, pool, org, "lesson-puro", []int64{mNexus})            // 1 project → nexusyn
-	dMisto := insertDerived(ctx, t, pool, org, "lesson-misto", []int64{mNexus, mReach})  // 2 projects → global
+	dPuro := insertDerived(ctx, t, pool, org, "lesson-puro", []int64{mNexus})              // 1 project → nexusyn
+	dMisto := insertDerived(ctx, t, pool, org, "lesson-misto", []int64{mNexus, mReach})    // 2 projects → global
 	dProjGlobal := insertDerived(ctx, t, pool, org, "lesson-pg", []int64{mNexus, mGlobal}) // project+global → global
-	dSoGlobal := insertDerived(ctx, t, pool, org, "lesson-glob", []int64{mGlobal})        // só global → global
+	dSoGlobal := insertDerived(ctx, t, pool, org, "lesson-glob", []int64{mGlobal})         // só global → global
 
 	// GUARDA (PASSO 0): nenhuma página viva duplicada por (org, domain, slug).
 	var dups int

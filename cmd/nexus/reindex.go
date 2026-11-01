@@ -13,7 +13,7 @@ import (
 
 // runReindexDates faz o BACKFILL do canal de datas (migration 0022): varre os
 // chunks existentes, extrai as datas canônicas do content e popula chunks.dates.
-// Idempotente — chunks sem data ficam com '' (default) e são pulados em re-runs.
+// Idempotente — chunks sem data ficam com ” (default) e são pulados em re-runs.
 //
 // Usa ADMIN_DATABASE_URL (role nexus = superuser do container, bypassa RLS) pra
 // ver/atualizar chunks de todas as orgs num passe só. One-off pós-deploy.

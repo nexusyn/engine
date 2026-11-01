@@ -44,7 +44,7 @@ func TestGenEdgeBackfillSQL(t *testing.T) {
 		if i == len(pairs)-1 {
 			sep = ""
 		}
-		b.WriteString(fmt.Sprintf("  ('%s','%s')%s\n", p[0], p[1], sep))
+		fmt.Fprintf(&b, "  ('%s','%s')%s\n", p[0], p[1], sep)
 	}
 	b.WriteString(") AS m(raw, canon) WHERE e.kind = m.raw;\n\n")
 	b.WriteString("-- 2) qualquer kind restante fora do conjunto canônico → relates_to\n")

@@ -787,7 +787,6 @@ func Handler(d Deps) http.Handler {
 	})
 }
 
-
 // RunStdio executa o servidor MCP sobre standard I/O (stdin/stdout).
 // Usado por clientes MCP locais (desktop/CLI) e runners de introspecção (Glama).
 func RunStdio(ctx context.Context, d Deps) error {

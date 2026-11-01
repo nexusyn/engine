@@ -184,7 +184,7 @@ func renderHandoffSection(item *HandoffItem) string {
 
 	var b strings.Builder
 	b.WriteString("## 🔄 Última Sessão (Handoff Automático)\n\n")
-	
+
 	meta := []string{}
 	if item.AgentSource != "" {
 		meta = append(meta, fmt.Sprintf("Agente anterior: **%s**", item.AgentSource))

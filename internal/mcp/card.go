@@ -8,10 +8,10 @@ import (
 // ServerCard retorna a especificação pública do servidor MCP para registries (Smithery, Glama)
 // sem necessidade de autenticação prévia.
 type ServerCard struct {
-	Schema         string                 `json:"$schema,omitempty"`
-	ServerInfo     ServerInfo             `json:"serverInfo"`
-	Authentication ServerAuth             `json:"authentication"`
-	Tools          []ServerToolCard       `json:"tools"`
+	Schema         string           `json:"$schema,omitempty"`
+	ServerInfo     ServerInfo       `json:"serverInfo"`
+	Authentication ServerAuth       `json:"authentication"`
+	Tools          []ServerToolCard `json:"tools"`
 }
 
 type ServerInfo struct {

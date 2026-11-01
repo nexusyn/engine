@@ -33,7 +33,9 @@ func TestRateLimiter_BucketPerOrg(t *testing.T) {
 	seedLimiter(rl, 2, 0) // org 2: ilimitado
 
 	r := reqWithOrg(1)
-	if !rl.allow(r, 1) || !rl.allow(r, 1) {
+	first := rl.allow(r, 1)
+	second := rl.allow(r, 1)
+	if !first || !second {
 		t.Fatal("burst de 2 deveria passar")
 	}
 	if rl.allow(r, 1) {
