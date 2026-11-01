@@ -461,7 +461,8 @@ func newServer(d Deps) *mcpsdk.Server {
 		if d.Pool != nil {
 			if q := metering.CheckAndIncrQuery(ctx, d.Pool, orgID, metering.Enforced()); !q.Allowed {
 				return nil, searchOut{}, fmt.Errorf(
-					"monthly query limit reached (%d/%d) — upgrade your plan for more queries", q.Used, q.Max)
+					"monthly query limit reached (%d/%d) — 72 hours have passed since the notice email; buy a $1 pack (50 queries + 500 memories) at %s",
+					q.Used, q.Max, metering.TopupURL())
 			}
 		}
 		limit := clampSearchLimit(in.Limit)
@@ -785,6 +786,7 @@ func Handler(d Deps) http.Handler {
 		inner.ServeHTTP(w, r)
 	})
 }
+
 
 // RunStdio executa o servidor MCP sobre standard I/O (stdin/stdout).
 // Usado por clientes MCP locais (desktop/CLI) e runners de introspecção (Glama).

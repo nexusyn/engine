@@ -54,8 +54,8 @@ const (
 // caller seleciona um subconjunto via ?sections=, os pesos são renormalizados
 // sobre as seções escolhidas — quem fica usa o budget de quem saiu.
 var (
-	ctxSectionOrder   = []string{"guidelines", "profile", "index", "recent"}
-	ctxSectionWeights = map[string]int{"guidelines": 50, "profile": 15, "index": 20, "recent": 15}
+	ctxSectionOrder   = []string{"inbox", "handoff", "guidelines", "profile", "index", "recent"}
+	ctxSectionWeights = map[string]int{"inbox": 15, "handoff": 20, "guidelines": 35, "profile": 10, "index": 10, "recent": 10}
 )
 
 // ctxParseSections lê ?sections (CSV allowlist das seções). Ausente/vazio → todas.
@@ -120,6 +120,7 @@ type contextMeta struct {
 type ContextResponse struct {
 	OrganizationID int64               `json:"organization_id"`
 	Project        string              `json:"project,omitempty"`
+	Handoff        *HandoffItem        `json:"handoff,omitempty"`
 	Guidelines     []guideline.Item    `json:"guidelines"`
 	Profile        contextProfile      `json:"profile"`
 	ProjectPages   []contextWikiPage   `json:"project_pages"`
@@ -146,9 +147,31 @@ func ContextHandler(pool *pgxpool.Pool) http.HandlerFunc {
 		enabled := ctxParseSections(r.URL.Query().Get("sections"))
 
 		// Busca SÓ as seções habilitadas (pula o trabalho de DB do que foi excluído).
+		var inbox []ProjectMessage
+		if enabled["inbox"] {
+			inbox, err = FetchInboxMessages(r.Context(), pool, orgID, project, "unread", 5)
+			if err != nil {
+				writeInternalError(w, "context inbox", err)
+				return
+			}
+		}
+
+		var handoff *HandoffItem
+		if enabled["handoff"] {
+			var found bool
+			handoff, found, err = FetchLatestHandoff(r.Context(), pool, orgID, project)
+			if err != nil {
+				writeInternalError(w, "context handoff", err)
+				return
+			}
+			if !found {
+				handoff = nil
+			}
+		}
+
 		var guidelines []guideline.Item
 		if enabled["guidelines"] {
-			guidelines, err = guideline.Fetch(r.Context(), pool, orgID)
+			guidelines, err = guideline.FetchScoped(r.Context(), pool, orgID, project)
 			if err != nil {
 				writeInternalError(w, "context guidelines", err)
 				return
@@ -180,12 +203,12 @@ func ContextHandler(pool *pgxpool.Pool) http.HandlerFunc {
 			}
 		}
 
-		pack, truncated := renderContextPack(orgID, project, guidelines, prof, wikiPages, recent, enabled, maxTokens*ctxCharsPerToken)
+		pack, truncated := renderContextPack(orgID, project, inbox, handoff, guidelines, prof, wikiPages, recent, enabled, maxTokens*ctxCharsPerToken)
 
 		if strings.EqualFold(r.URL.Query().Get("format"), "markdown") {
 			w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(pack)) // #nosec G705 -- text/markdown content type, not HTML
+			_, _ = w.Write([]byte(pack))
 			return
 		}
 
@@ -204,6 +227,7 @@ func ContextHandler(pool *pgxpool.Pool) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, ContextResponse{
 			OrganizationID: orgID,
 			Project:        project,
+			Handoff:        handoff,
 			Guidelines:     guidelines,
 			Profile: contextProfile{
 				Content:          prof.Content,
@@ -325,7 +349,7 @@ func fetchContextWiki(ctx context.Context, pool *pgxpool.Pool, orgID int64, proj
 // sobre as seções habilitadas — quem fica herda o budget de quem saiu. Espaço não
 // usado por uma seção dentro do próprio cap NÃO é reaproveitado (mantém compacto).
 // Retorna (pacote, truncated).
-func renderContextPack(orgID int64, project string, guidelines []guideline.Item, prof profile.Profile, wiki []contextWikiPage, recent []contextRecentItem, enabled map[string]bool, maxRunes int) (string, bool) {
+func renderContextPack(orgID int64, project string, inbox []ProjectMessage, handoff *HandoffItem, guidelines []guideline.Item, prof profile.Profile, wiki []contextWikiPage, recent []contextRecentItem, enabled map[string]bool, maxRunes int) (string, bool) {
 	total := 0
 	for _, k := range ctxSectionOrder {
 		if enabled[k] {
@@ -336,6 +360,8 @@ func renderContextPack(orgID int64, project string, guidelines []guideline.Item,
 		total = 1
 	}
 	rendered := map[string]string{
+		"inbox":      renderInboxSection(inbox),
+		"handoff":    renderHandoffSection(handoff),
 		"guidelines": renderGuidelines(guidelines),
 		"profile":    renderProfileSection(prof),
 		"index":      renderProjectIndex(project, wiki),
@@ -394,20 +420,20 @@ func renderProjectIndex(project string, pages []contextWikiPage) string {
 	}
 	var b strings.Builder
 	if project != "" {
-		b.WriteString("## Índice do projeto: " + project + "\n\n")
+		b.WriteString("## 📚 Wiki do Projeto: " + project + "\n\n")
 	} else {
-		b.WriteString("## Índice (wiki recente)\n\n")
+		b.WriteString("## 📚 Wiki Recente (Cross-Project)\n\n")
 	}
 	for _, p := range pages {
-		b.WriteString("- **")
-		b.WriteString(strings.TrimSpace(p.Title))
-		b.WriteString("**")
+		title := strings.TrimSpace(p.Title)
+		b.WriteString("- [[" + title + "]]")
 		if prev := collapseWS(p.Preview); prev != "" {
 			b.WriteString(" — ")
 			b.WriteString(prev)
 		}
 		b.WriteString("\n")
 	}
+	b.WriteString("\n")
 	return b.String()
 }
 

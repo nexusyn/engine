@@ -49,7 +49,7 @@ const (
 // aplicado no RRF — aqui só melhoramos a ORDEM dentro do canal.
 //
 // Estratégia (sem chamada LLM, só SQL):
-//  1. Achar entities cujo NAME tem similarity trgm > entityMatchThreshold com a
+//  1. Achar entities cujo NAME tem similarity trgm > EntityMatchThreshold com a
 //     query, OU cujo aliases contém uma palavra da query (case-insensitive),
 //     limitado a entityMatchCap entidades (as mais similares). Quando asOf
 //     setado, restringe a entities válidas naquele timestamp.
@@ -97,7 +97,7 @@ func entityMatchSearch(ctx context.Context, tx pgx.Tx, query string, limit int, 
 			-- antigo similarity()>thr OR EXISTS(alias) forçava seq scan de todas as
 			-- entities (~90ms). Ramo do nome (índice) + ramo de alias (seq, mas só
 			-- nas entities com alias), via UNION. threshold do %% = GUC
-			-- pg_trgm.similarity_threshold (0.3 = entityMatchThreshold).
+			-- pg_trgm.similarity_threshold (0.3 = EntityMatchThreshold).
 			SELECT id, max(sim) AS sim FROM (
 				SELECT e.id, similarity(e.name, $1) AS sim
 				FROM entities e

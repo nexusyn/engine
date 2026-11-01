@@ -171,7 +171,7 @@ func EnqueueCompileOrg(ctx context.Context, client *river.Client[pgx.Tx], orgID 
 // ─────────────────────────────────────────────────────────────────────────────
 
 // RegisterCompileWorkers anexa o scheduler + o worker per-org. Só faz sentido com
-// um provider de LLM (MiniMax-M2.7) configurado.
+// um provider de LLM (MiniMax-M3.1-Flash) configurado.
 func RegisterCompileWorkers(workers *river.Workers, pool *pgxpool.Pool, provider llm.Provider, maxItems, maxOrgs int, agentSlug string) error {
 	if err := river.AddWorkerSafely(workers, NewScheduleCompileWorker(pool, maxOrgs)); err != nil {
 		return err

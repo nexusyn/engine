@@ -16,7 +16,7 @@ import (
 // Stream implementa StreamingProvider via chatcompletion_v2 com stream:true
 // (SSE OpenAI-compatible: `data: {...}` com choices[0].delta.content).
 //
-// Reasoning (M2.7+): o modelo emite chain-of-thought antes da resposta —
+// Reasoning (M3.1 / M2.7+): o modelo emite chain-of-thought antes da resposta —
 // inline como <think>...</think> no content e/ou no campo separado
 // delta.reasoning_content. Ambos são suprimidos: reasoning_content é
 // ignorado e o content passa pelo thinkStripper incremental (a tag pode
@@ -40,12 +40,14 @@ func (m *MiniMaxProvider) Stream(ctx context.Context, prompt Prompt) (<-chan Str
 	}
 	messages = append(messages, minimaxMessage{Role: "user", Content: prompt.User})
 
+	effort, maxOut := minimaxReasoningAndTokens(prompt)
 	body := minimaxRequest{
-		Model:       m.model,
-		Messages:    messages,
-		MaxTokens:   prompt.MaxTokens,
-		Temperature: prompt.Temperature,
-		Stream:      true,
+		Model:           m.model,
+		Messages:        messages,
+		MaxTokens:       maxOut,
+		Temperature:     prompt.Temperature,
+		Stream:          true,
+		ReasoningEffort: effort,
 	}
 
 	raw, err := json.Marshal(body)

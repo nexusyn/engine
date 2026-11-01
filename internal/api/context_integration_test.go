@@ -93,8 +93,8 @@ func TestContextHandler_EndToEnd(t *testing.T) {
 	assert.Contains(t, recentTitles, "Deploy do endpoint context")
 	assert.NotContains(t, recentTitles, "Reachyn billing", "outro projeto não pode vazar nas mudanças")
 
-	// Pacote renderizado contém as 4 seções e o cabeçalho.
-	for _, want := range []string{"org 2", "projeto nexusyn", "Guidelines da org", "Regra de ouro", "Perfil do usuário", "Índice do projeto: nexusyn", "Memória por projeto", "Últimas mudanças", "Deploy do endpoint context"} {
+	// Pacote renderizado contém as seções e o cabeçalho.
+	for _, want := range []string{"org 2", "projeto nexusyn", "Guidelines da org", "Regra de ouro", "Perfil do usuário", "Wiki do Projeto: nexusyn", "Memória por projeto", "Últimas mudanças", "Deploy do endpoint context"} {
 		assert.Contains(t, resp.Context, want)
 	}
 	assert.NotContains(t, resp.Context, "Reachyn billing", "wiki de outro projeto não pode vazar")
@@ -127,7 +127,7 @@ func TestContextHandler_EndToEnd(t *testing.T) {
 	assert.Empty(t, respS.RecentChanges, "recentes excluídos por sections")
 	assert.Equal(t, []string{"guidelines"}, respS.Meta.Sections)
 	assert.Contains(t, respS.Context, "Guidelines da org")
-	assert.NotContains(t, respS.Context, "Índice do projeto")
+	assert.NotContains(t, respS.Context, "Wiki do Projeto")
 	assert.NotContains(t, respS.Context, "Últimas mudanças")
 
 	// --- org suspensa → 403 (AUD-010) ---

@@ -99,9 +99,7 @@ func (r *Resolver) Generation(ctx context.Context) llm.Provider {
 	if v := r.get("generation", sig(c), func() (any, error) {
 		return llm.BuildForWithKey(r.cfg.LLM, c.Provider, c.Model, c.APIKey, c.BaseURL)
 	}); v != nil {
-		if p, ok := v.(llm.Provider); ok {
-			return p
-		}
+		return v.(llm.Provider)
 	}
 	return r.defGen
 }
@@ -116,9 +114,7 @@ func (r *Resolver) Extraction(ctx context.Context) llm.Provider {
 	if v := r.get("extraction", sig(c), func() (any, error) {
 		return llm.BuildForWithKey(r.cfg.LLM, c.Provider, c.Model, c.APIKey, c.BaseURL)
 	}); v != nil {
-		if p, ok := v.(llm.Provider); ok {
-			return p
-		}
+		return v.(llm.Provider)
 	}
 	return r.defExtract
 }
@@ -133,9 +129,7 @@ func (r *Resolver) Embed(ctx context.Context) embed.Provider {
 	if v := r.get("embed", sig(c), func() (any, error) {
 		return embed.BuildForKey(r.cfg.Embed, c.Provider, c.Model, c.APIKey, c.BaseURL)
 	}); v != nil {
-		if p, ok := v.(embed.Provider); ok {
-			return p
-		}
+		return v.(embed.Provider)
 	}
 	return r.defEmbed
 }
@@ -150,9 +144,7 @@ func (r *Resolver) Reranker(ctx context.Context) rerank.Provider {
 	if v := r.get("rerank", sig(c), func() (any, error) {
 		return rerank.BuildForKey(r.cfg.Rerank, r.cfg.Embed, c.Provider, c.Model, c.APIKey, c.BaseURL)
 	}); v != nil {
-		if p, ok := v.(rerank.Provider); ok {
-			return p
-		}
+		return v.(rerank.Provider)
 	}
 	return r.defRerank
 }

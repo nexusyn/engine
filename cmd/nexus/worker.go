@@ -125,10 +125,14 @@ func runWorker() error {
 
 	// Auto-compile periódico (opt-in: COMPILE_INTERVAL>0). Incremental por watermark,
 	// teto de itens/org por rodada + teto de orgs/tick (anti-contenção da key MiniMax).
-	// Usa MiniMax-M2.7 (mais rápido em muitos lotes; mesmo do compile HTTP).
+	// Usa MiniMax-M3.1-Flash (ou cfg.LLM.MiniMax.Model; mesmo do compile HTTP).
 	var compilePeriodic *river.PeriodicJob
 	if cfg.Compile.Interval > 0 {
-		if cp, e := llm.BuildFor(cfg.LLM, "minimax", "MiniMax-M2.7"); e == nil && cp != nil {
+		compileModel := cfg.LLM.MiniMax.Model
+		if compileModel == "" {
+			compileModel = "MiniMax-M3.1-Flash"
+		}
+		if cp, e := llm.BuildFor(cfg.LLM, "minimax", compileModel); e == nil && cp != nil {
 			if err := job.RegisterCompileWorkers(workers, pool, cp,
 				cfg.Compile.MaxItemsPerRun, cfg.Compile.MaxOrgsPerTick, cfg.Compile.Agent); err != nil {
 				return fmt.Errorf("register compile workers: %w", err)
@@ -140,7 +144,7 @@ func runWorker() error {
 				"max_orgs_per_tick", cfg.Compile.MaxOrgsPerTick,
 				"agent", cfg.Compile.Agent)
 		} else {
-			slog.Warn("auto-compile ligado (COMPILE_INTERVAL) mas provider MiniMax-M2.7 indisponível — desligado", "err", e)
+			slog.Warn("auto-compile ligado (COMPILE_INTERVAL) mas provider MiniMax indisponível — desligado", "model", compileModel, "err", e)
 		}
 	}
 

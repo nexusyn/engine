@@ -203,7 +203,7 @@ func TestMiniMax_Smoke(t *testing.T) {
 
 	p := NewMiniMax(config.ProviderConfig{
 		APIKey:  "test-key",
-		Model:   "MiniMax-M1",
+		Model:   "MiniMax-M3.1-Flash",
 		BaseURL: srv.URL,
 		Timeout: 5 * time.Second,
 	})

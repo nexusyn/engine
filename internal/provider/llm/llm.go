@@ -35,9 +35,11 @@ type Prompt struct {
 	// prompt já força JSON via instrução textual).
 	JSONMode bool
 
-	// ThinkingBudget (tokens) liga raciocínio interno no provider Gemini.
-	// 0 = thinking off (resposta direta — default). >0 = enumera antes de
-	// responder (usado em count/aggregation queries). Outros providers ignoram.
+	// ThinkingBudget (tokens) controla o raciocínio interno:
+	// - Gemini: thinkingBudget=0 (off, resposta direta) ou >0 (enumera antes de responder).
+	// - MiniMax (M3.1+ exige adaptive thinking e rejeita "none"): 0 mapeia para
+	//   reasoning_effort="low" (evita consumir todo max_tokens em reasoning_content);
+	//   >0 mapeia para reasoning_effort="medium" com folga em max_tokens.
 	ThinkingBudget int
 }
 

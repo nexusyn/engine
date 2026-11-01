@@ -29,15 +29,30 @@ type Item struct {
 // NULL), ordenadas por id. Read-only, tenant-scoped. Retorna nil (sem erro)
 // quando pool é nil — caller não precisa tratar pool ausente.
 func Fetch(ctx context.Context, pool *pgxpool.Pool, orgID int64) ([]Item, error) {
+	return FetchScoped(ctx, pool, orgID, "")
+}
+
+// FetchScoped carrega as guidelines vigentes com distinção de projeto:
+// Se project estiver preenchido, carrega as guidelines globais (project IS NULL ou '')
+// E as guidelines específicas do projeto. Se project estiver vazio, carrega apenas as globais.
+func FetchScoped(ctx context.Context, pool *pgxpool.Pool, orgID int64, project string) ([]Item, error) {
 	if pool == nil {
 		return nil, nil
 	}
 	var items []Item
 	err := tenant.RunWithTenantReadOnly(ctx, pool, orgID, func(tx pgx.Tx) error {
-		rows, e := tx.Query(ctx,
-			`SELECT id, title, content FROM pages
-			 WHERE organization_id = $1 AND domain = 'guideline' AND valid_to IS NULL
-			 ORDER BY id`, orgID)
+		query := `SELECT id, title, content FROM pages
+			 WHERE organization_id = $1 AND domain = 'guideline' AND valid_to IS NULL`
+		args := []any{orgID}
+		if project != "" {
+			query += ` AND (project IS NULL OR project = '' OR project = $2)`
+			args = append(args, project)
+		} else {
+			query += ` AND (project IS NULL OR project = '')`
+		}
+		query += ` ORDER BY id`
+
+		rows, e := tx.Query(ctx, query, args...)
 		if e != nil {
 			return e
 		}

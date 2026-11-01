@@ -98,7 +98,7 @@ func TestMiniMax_Stream(t *testing.T) {
 
 	p := NewMiniMax(config.ProviderConfig{
 		APIKey:  "k",
-		Model:   "MiniMax-M2.7",
+		Model:   "MiniMax-M3.1-Flash",
 		BaseURL: srv.URL,
 		Timeout: 5 * time.Second,
 	})
@@ -113,7 +113,7 @@ func TestMiniMax_Stream(t *testing.T) {
 	assert.Equal(t, 12, last.TokensIn)
 	assert.Equal(t, 9, last.TokensOut)
 	assert.Equal(t, "minimax", last.Provider)
-	assert.Equal(t, "MiniMax-M2.7", last.Model)
+	assert.Equal(t, "MiniMax-M3.1-Flash", last.Model)
 	assert.GreaterOrEqual(t, last.LatencyMs, 0)
 }
 

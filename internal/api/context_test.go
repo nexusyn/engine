@@ -60,6 +60,13 @@ func TestCapRunes(t *testing.T) {
 }
 
 func TestRenderContextPack_Budget(t *testing.T) {
+	handoff := &HandoffItem{
+		TaskSummary: strings.Repeat("ajuste no engine ", 50),
+		AgentSource: "claude",
+		Branch:      "feat/test",
+		ActiveFiles: []string{"main.go", "context.go"},
+		NextSteps:   "rodar testes",
+	}
 	guidelines := []guideline.Item{
 		{ID: 1, Title: "Regra A", Content: strings.Repeat("alpha ", 500)},
 		{ID: 2, Title: "Regra B", Content: strings.Repeat("beta ", 500)},
@@ -76,21 +83,19 @@ func TestRenderContextPack_Budget(t *testing.T) {
 
 	maxTokens := 300
 	maxRunes := maxTokens * ctxCharsPerToken
-	allOn := map[string]bool{"guidelines": true, "profile": true, "index": true, "recent": true}
-	pack, truncated := renderContextPack(7, "nexusyn", guidelines, prof, wiki, recent, allOn, maxRunes)
+	allOn := map[string]bool{"inbox": true, "handoff": true, "guidelines": true, "profile": true, "index": true, "recent": true}
+	pack, truncated := renderContextPack(7, "nexusyn", nil, handoff, guidelines, prof, wiki, recent, allOn, maxRunes)
 
 	if !truncated {
 		t.Errorf("esperava truncated=true com budget apertado")
 	}
-	// O pacote total não pode exceder muito o budget: header + 4 seções capadas
-	// a 50/15/20/15%. Margem p/ header + marcadores.
 	got := utf8.RuneCountInString(pack)
-	ceiling := maxRunes + 200
+	ceiling := maxRunes + 300
 	if got > ceiling {
 		t.Errorf("pacote = %d runas, acima do teto %d (budget %d)", got, ceiling, maxRunes)
 	}
-	// Deve conter as 4 seções e o header da org/projeto.
-	for _, want := range []string{"org 7", "projeto nexusyn", "Guidelines da org", "Perfil do usuário", "Índice do projeto: nexusyn", "Últimas mudanças", "Mudança recente"} {
+	// Deve conter as seções e o header da org/projeto.
+	for _, want := range []string{"org 7", "projeto nexusyn", "Última Sessão (Handoff Automático)", "Guidelines da org", "Perfil do usuário", "Wiki do Projeto: nexusyn", "Últimas mudanças"} {
 		if !strings.Contains(pack, want) {
 			t.Errorf("pacote não contém %q", want)
 		}
@@ -98,13 +103,13 @@ func TestRenderContextPack_Budget(t *testing.T) {
 }
 
 func TestRenderContextPack_EmptySections(t *testing.T) {
-	// Sem guidelines, perfil, wiki nem recentes → só o header, sem truncar.
-	allOn := map[string]bool{"guidelines": true, "profile": true, "index": true, "recent": true}
-	pack, truncated := renderContextPack(2, "", nil, profile.Profile{}, nil, nil, allOn, 1000)
+	// Sem handoff, guidelines, perfil, wiki nem recentes → só o header, sem truncar.
+	allOn := map[string]bool{"inbox": true, "handoff": true, "guidelines": true, "profile": true, "index": true, "recent": true}
+	pack, truncated := renderContextPack(2, "", nil, nil, nil, profile.Profile{}, nil, nil, allOn, 1000)
 	if truncated {
 		t.Errorf("seções vazias não deveriam truncar")
 	}
-	if strings.Contains(pack, "Guidelines da org") || strings.Contains(pack, "Perfil do usuário") || strings.Contains(pack, "Índice") || strings.Contains(pack, "Últimas mudanças") {
+	if strings.Contains(pack, "Mensagens Pendentes") || strings.Contains(pack, "Última Sessão") || strings.Contains(pack, "Guidelines da org") || strings.Contains(pack, "Perfil do usuário") || strings.Contains(pack, "Índice") || strings.Contains(pack, "Últimas mudanças") {
 		t.Errorf("seções vazias não deveriam aparecer: %q", pack)
 	}
 	if !strings.Contains(pack, "org 2") {
@@ -133,7 +138,7 @@ func TestCtxClampRecent(t *testing.T) {
 }
 
 func TestCtxParseSections(t *testing.T) {
-	all := map[string]bool{"guidelines": true, "profile": true, "index": true, "recent": true}
+	all := map[string]bool{"inbox": true, "handoff": true, "guidelines": true, "profile": true, "index": true, "recent": true}
 	eq := func(a, b map[string]bool) bool {
 		if len(a) != len(b) {
 			return false
@@ -154,7 +159,9 @@ func TestCtxParseSections(t *testing.T) {
 		{"bogus,xpto", all}, // nenhum válido → todas
 		{"guidelines,index", map[string]bool{"guidelines": true, "index": true}},
 		{" GUIDELINES , recent ", map[string]bool{"guidelines": true, "recent": true}}, // case/espaço
-		{"profile,bogus", map[string]bool{"profile": true}},                            // ignora inválido
+		{"handoff,profile", map[string]bool{"handoff": true, "profile": true}},
+		{"inbox,guidelines", map[string]bool{"inbox": true, "guidelines": true}},
+		{"profile,bogus", map[string]bool{"profile": true}}, // ignora inválido
 	}
 	for _, c := range cases {
 		if got := ctxParseSections(c.raw); !eq(got, c.want) {
@@ -171,11 +178,11 @@ func TestRenderContextPack_SectionsSubset(t *testing.T) {
 
 	// Só guidelines + índice: perfil e recentes NÃO entram, mesmo com dados.
 	only := map[string]bool{"guidelines": true, "index": true}
-	pack, _ := renderContextPack(1, "p", guidelines, prof, wiki, recent, only, 4000)
-	if !strings.Contains(pack, "Guidelines da org") || !strings.Contains(pack, "Índice do projeto") {
+	pack, _ := renderContextPack(1, "p", nil, nil, guidelines, prof, wiki, recent, only, 4000)
+	if !strings.Contains(pack, "Guidelines da org") || !strings.Contains(pack, "Wiki do Projeto") {
 		t.Errorf("seções escolhidas deveriam aparecer: %q", pack)
 	}
-	if strings.Contains(pack, "Perfil do usuário") || strings.Contains(pack, "Últimas mudanças") {
+	if strings.Contains(pack, "Perfil do usuário") || strings.Contains(pack, "Últimas mudanças") || strings.Contains(pack, "Última Sessão") || strings.Contains(pack, "Mensagens Pendentes") {
 		t.Errorf("seções não escolhidas vazaram: %q", pack)
 	}
 }

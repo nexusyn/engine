@@ -53,8 +53,8 @@ func checkQueryQuota(w http.ResponseWriter, r *http.Request, pool *pgxpool.Pool,
 	quota := metering.CheckAndIncrQuery(r.Context(), pool, orgID, metering.Enforced())
 	if !quota.Allowed {
 		writeError(w, http.StatusPaymentRequired, fmt.Sprintf(
-			"monthly query limit reached (%d/%d) — upgrade your plan for more queries",
-			quota.Used, quota.Max))
+			"monthly query limit reached (%d/%d) — 72 hours have passed since the notice email; buy a $1 pack (50 queries + 500 memories) at %s",
+			quota.Used, quota.Max, metering.TopupURL()))
 		return false
 	}
 	return true

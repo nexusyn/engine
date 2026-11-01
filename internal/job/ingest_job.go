@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -189,7 +188,7 @@ func (w *IngestWorker) Work(ctx context.Context, job *river.Job[IngestArgs]) err
 			slog.Info("ingest: dedup skip (content_hash igual)",
 				"org_id", args.OrganizationID, "existing_page_id", existingID, "slug", slug)
 			return nil
-		case errors.Is(derr, pgx.ErrNoRows):
+		case derr == pgx.ErrNoRows:
 			// não é duplicata literal — segue pro INSERT
 		default:
 			return fmt.Errorf("dedup check: %w", derr)
@@ -308,7 +307,7 @@ func semanticDedup(ctx context.Context, tx pgx.Tx, org int64, domain string, con
 		}
 		slog.Info("ingest: dedup semantico supersede (parafrase)",
 			"org_id", org, "superseded_page_id", simID, "cosine", 1-dist, "slug", slug)
-	case serr == nil, errors.Is(serr, pgx.ErrNoRows):
+	case serr == nil, serr == pgx.ErrNoRows:
 	default:
 		return vec, fmt.Errorf("dedup semantico busca: %w", serr)
 	}

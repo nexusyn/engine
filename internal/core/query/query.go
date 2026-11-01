@@ -272,7 +272,7 @@ func (s *Service) buildGen(provider, model string) llm.Provider {
 }
 
 // temporalGenProvider/temporalGenModel: modelo dedicado a queries de raciocínio
-// temporal (env NEXUS_GEN_TEMPORAL_MODEL="provider/model", ex "minimax/MiniMax-M2.7").
+// temporal (env NEXUS_GEN_TEMPORAL_MODEL="provider/model", ex "minimax/MiniMax-M3.1-Flash").
 // Roteador HÍBRIDO: o default (org config / global) leva quase tudo — bench: M3
 // ganha em knowledge-update (+25pp), single-session (100%), preference — mas o
 // M3 é lento e ESTOURA timeout em date-math (temporal-reasoning). Pra temporais,

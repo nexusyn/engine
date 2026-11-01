@@ -197,11 +197,6 @@ func runMCP() error {
 	return mcp.RunStdio(ctx, d)
 }
 
-// runServe inicia o servidor HTTP ou modo worker.
-// Flags:
-//
-//	--worker   roda apenas workers River (sem HTTP server)
-//	(default)  roda HTTP server + insert-only river client (enqueue de jobs)
 func runServe(args []string) error {
 	workerMode := false
 	for _, a := range args {
@@ -288,13 +283,16 @@ func runServe(args []string) error {
 		slog.Info("llm provider ready", "provider", llmProvider.Name(), "model", llmProvider.Model())
 	}
 
-	// Compile usa MiniMax-M2.7 (mais rápido que o M3 primário): o compile faz MUITOS
-	// lotes seguidos e o M3 degrada/throttle no meio (timeout em cascata, fallbacks
-	// mortos). M2.7 completa antes. Fallback pro primário se não construir.
+	// Compile usa MiniMax-M3.1-Flash (ou cfg.LLM.MiniMax.Model): o compile faz MUITOS
+	// lotes seguidos e precisa de baixa latência sem degradar. Fallback pro primário se não construir.
 	compileProvider := llmProvider
-	if p, e := llm.BuildFor(cfg.LLM, "minimax", "MiniMax-M2.7"); e == nil && p != nil {
+	compileModel := cfg.LLM.MiniMax.Model
+	if compileModel == "" {
+		compileModel = "MiniMax-M3.1-Flash"
+	}
+	if p, e := llm.BuildFor(cfg.LLM, "minimax", compileModel); e == nil && p != nil {
 		compileProvider = p
-		slog.Info("compile provider ready", "model", "MiniMax-M2.7")
+		slog.Info("compile provider ready", "model", compileModel)
 	}
 
 	// Juiz pro /v1/eval — independente do modelo testado (prefere anthropic).
@@ -334,13 +332,16 @@ func runServe(args []string) error {
 
 	// Middlewares globais
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP) //nolint:staticcheck // RealIP is used behind reverse proxy (Traefik)
+	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(cfg.HTTP.WriteTimeout))
 
 	// Públicos (sem auth, sem tenancy)
 	r.Get("/health", api.HealthHandler(version, commit))
+	r.Head("/health", api.HealthHandler(version, commit))
 	r.Get("/ready", api.ReadyHandler(pool))
+	r.Get("/.well-known/mcp/server-card.json", mcp.ServerCardHandler(version))
+	r.Head("/.well-known/mcp/server-card.json", mcp.ServerCardHandler(version))
 
 	// /v1/* requer Bearer token + tenancy auto-bound via context
 	r.Route("/v1", func(r chi.Router) {
@@ -355,9 +356,22 @@ func runServe(args []string) error {
 		r.Get("/me", api.MeHandler())
 
 		// Pacote núcleo de contexto (push p/ hook SessionStart): guidelines +
-		// perfil + índice do projeto, com teto de tokens. Read-only, org-scoped,
-		// gated por billing. Complementa o pull do search_memory.
+		// perfil + índice do projeto + handoff da última sessão, com teto de tokens.
+		// Read-only, org-scoped, gated por billing. Complementa o pull do search_memory.
 		r.Get("/context", api.ContextHandler(pool))
+
+		// Session Handoff (passagem de bastão entre agentes: SessionEnd -> SessionStart)
+		r.Post("/sessions/handoff", api.SessionHandoffCreateHandler(pool))
+		r.Get("/sessions/handoff/latest", api.SessionHandoffLatestHandler(pool))
+
+		// Inter-Project Messages (Caixa de correio assíncrona entre agentes/projetos)
+		r.Post("/messages/send", api.ProjectMessageSendHandler(pool))
+		r.Get("/messages/inbox", api.ProjectMessageInboxHandler(pool))
+		r.Post("/messages/{id}/claim", api.ProjectMessageClaimHandler(pool))
+		r.Post("/messages/{id}/resolve", api.ProjectMessageResolveHandler(pool))
+
+		// Karpathy Wiki Exporter (projeção em árvore de Markdown / Obsidian)
+		r.Get("/wiki/export", api.WikiExportHandler(pool))
 
 		// Day 6: ingest assíncrono via River
 		r.Post("/ingest", api.IngestHandler(pool))
@@ -406,8 +420,8 @@ func runServe(args []string) error {
 		// Control-plane: grava a quota de plano da org (max_pages/queries/rps).
 		// Chamado pelo console (SyncTenantPlan) ao mudar de plano. ADMIN-ONLY.
 		r.With(auth.RequireAbility("admin")).Put("/admin/orgs/{id}/limits", api.AdminSetLimitsHandler(pool))
-		// r.With(auth.RequireAbility("admin")).Put("/admin/orgs/{id}/pages-over", api.AdminSetPagesOverHandler(pool))
-		// r.With(auth.RequireAbility("admin")).Put("/admin/orgs/{id}/quota-notice", api.AdminArmQuotaNoticeHandler(pool))
+		r.With(auth.RequireAbility("admin")).Put("/admin/orgs/{id}/pages-over", api.AdminSetPagesOverHandler(pool))
+		r.With(auth.RequireAbility("admin")).Put("/admin/orgs/{id}/quota-notice", api.AdminArmQuotaNoticeHandler(pool))
 
 		// Control-plane: suspender/reativar org (billing). Chamado pelo console
 		// (HandleStripeWebhook) quando a assinatura falha/cancela. ADMIN-ONLY. AUD-010.
@@ -536,7 +550,7 @@ func runHealthCheck() error {
 		port = "8044"
 	}
 	client := http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("http://localhost:%s/health", port)) // #nosec G704 -- localhost healthcheck only
+	resp, err := client.Get(fmt.Sprintf("http://localhost:%s/health", port))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "health-check: %v\n", err)
 		return err

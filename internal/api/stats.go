@@ -72,6 +72,7 @@ func UsageHandler(pool *pgxpool.Pool) http.HandlerFunc {
 		// 0 = ilimitado. Best-effort: erro deixa o bloco zerado (UI degrada bem).
 		var maxPages, maxQueries, queriesUsed int64
 		var maxRPS int
+		var overSince *time.Time
 		_ = tenant.RunWithTenantReadOnly(r.Context(), pool, orgID, func(tx pgx.Tx) error {
 			return tx.QueryRow(r.Context(),
 				`SELECT
@@ -80,9 +81,10 @@ func UsageHandler(pool *pgxpool.Pool) http.HandlerFunc {
 				   coalesce((SELECT max_rps     FROM org_limits WHERE organization_id = $1), 0),
 				   coalesce((SELECT used FROM org_usage
 				             WHERE organization_id = $1 AND metric = 'query'
-				               AND period = date_trunc('month', now())::date), 0)`,
+				               AND period = date_trunc('month', now())::date), 0),
+				   (SELECT quota_over_since FROM org_limits WHERE organization_id = $1)`,
 				orgID,
-			).Scan(&maxPages, &maxQueries, &maxRPS, &queriesUsed)
+			).Scan(&maxPages, &maxQueries, &maxRPS, &queriesUsed, &overSince)
 		})
 		quota := map[string]any{
 			"max_pages":    maxPages,
@@ -93,7 +95,13 @@ func UsageHandler(pool *pgxpool.Pool) http.HandlerFunc {
 			"period":       time.Now().UTC().Format("2006-01"),
 			// false = modo observação (contadores rodam, ninguém é bloqueado) —
 			// o console usa isso pra não anunciar bloqueio que não existe.
-			"enforced": metering.Enforced(),
+			"enforced":         metering.Enforced(),
+			"queries_enforced": metering.QueryBlockActive(time.Now()),
+			"grace_hours":      int(metering.QueryGrace / time.Hour),
+		}
+		if overSince != nil {
+			quota["over_since"] = overSince.UTC().Format(time.RFC3339)
+			quota["block_at"] = overSince.Add(metering.QueryGrace).UTC().Format(time.RFC3339)
 		}
 		if maxQueries > 0 {
 			quota["queries_percent"] = int(queriesUsed * 100 / maxQueries)

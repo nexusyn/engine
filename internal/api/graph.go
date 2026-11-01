@@ -1,7 +1,6 @@
 package api
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -148,7 +147,7 @@ func EntityMemoriesHandler(pool *pgxpool.Pool) http.HandlerFunc {
 			return rows.Err()
 		})
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if err == pgx.ErrNoRows {
 				writeError(w, http.StatusNotFound, "entity não encontrada")
 				return
 			}

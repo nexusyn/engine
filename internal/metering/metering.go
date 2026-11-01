@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -31,8 +32,50 @@ var enforced atomic.Bool
 
 func init() { enforced.Store(os.Getenv("NEXUS_ENFORCE_LIMITS") == "true") }
 
-// Enforced diz se a cota é bloqueante (402). Lê o flag em memória (reflete o toggle).
+// Enforced diz se a cota é bloqueante (402) no kill-switch global. Lê o flag em
+// memória (reflete o toggle). Memórias seguem só este flag.
 func Enforced() bool { return enforced.Load() }
+
+// queryBlockStart é o instante em que queries novas passam a ser bloqueadas
+// quando a cota do plano (mais pacotes) acaba, mesmo com NEXUS_ENFORCE_LIMITS
+// desligado. 1º de outubro de 2026, meia-noite em São Paulo.
+var queryBlockStart = time.Date(2026, 10, 1, 0, 0, 0, 0, saoPaulo())
+
+func saoPaulo() *time.Location {
+	loc, err := time.LoadLocation("America/Sao_Paulo")
+	if err != nil {
+		return time.FixedZone("BRT", -3*60*60)
+	}
+	return loc
+}
+
+// QueryGrace é o aviso antes do corte. O relógio começa quando o e-mail sai
+// (o console chama arm_quota_notice). Queries novas só bloqueiam 72h depois
+// desse e-mail, se a cota continuar estourada.
+const QueryGrace = 72 * time.Hour
+
+// QueryBlockActive diz se a política de corte (com 72h de aviso) está valendo.
+// Verdadeiro a partir de queryBlockStart. O kill-switch global, antes dessa
+// data, continua bloqueando na hora.
+func QueryBlockActive(now time.Time) bool {
+	return !now.Before(queryBlockStart)
+}
+
+// GraceElapsed diz se o corte já venceu. overSince zero = relógio ainda não armado.
+func GraceElapsed(now, overSince time.Time) bool {
+	if overSince.IsZero() {
+		return false
+	}
+	return !now.Before(overSince.Add(QueryGrace))
+}
+
+// TopupURL é o checkout do pacote de US$ 1 (50 queries + 500 memórias).
+func TopupURL() string {
+	if u := os.Getenv("NEXUS_TOPUP_URL"); u != "" {
+		return u
+	}
+	return "https://app.nexusyn.ai/billing/topup"
+}
 
 // SetEnforced atualiza o flag em memória (chamado pelo handler admin após gravar no DB).
 func SetEnforced(v bool) { enforced.Store(v) }
@@ -51,9 +94,11 @@ func RefreshEnforced(ctx context.Context, pool *pgxpool.Pool) {
 
 // QuotaResult é o veredito do check de quota mensal.
 type QuotaResult struct {
-	Allowed bool
-	Used    int64 // consumo do período após o check (sem incremento quando bloqueado)
-	Max     int64 // limite vigente (0 = ilimitado)
+	Allowed   bool
+	Used      int64      // consumo do período após o check (sem incremento quando bloqueado)
+	Max       int64      // limite vigente (0 = ilimitado)
+	OverSince *time.Time // primeira vez acima da cota; nil = dentro da cota
+	BlockAt   *time.Time // instante do e-mail + 72h
 }
 
 // CheckAndIncrQuery incrementa o contador mensal de queries da org (org_usage,
@@ -64,12 +109,22 @@ type QuotaResult struct {
 // Fail-open: erro no check loga warn e LIBERA (bug nosso não derruba cliente).
 func CheckAndIncrQuery(ctx context.Context, pool *pgxpool.Pool, orgID int64, enforce bool) QuotaResult {
 	res := QuotaResult{Allowed: true}
-	err := pool.QueryRow(ctx,
-		`SELECT allowed, used, max_allowed FROM check_and_incr_usage($1, 'query', $2)`,
-		orgID, enforce,
-	).Scan(&res.Allowed, &res.Used, &res.Max)
+	now := time.Now()
+	var err error
+	if QueryBlockActive(now) {
+		err = pool.QueryRow(ctx,
+			`SELECT allowed, used, max_allowed, over_since, block_at
+			   FROM check_and_incr_query_grace($1, $2, true, $3)`,
+			orgID, enforce, int(QueryGrace/time.Hour),
+		).Scan(&res.Allowed, &res.Used, &res.Max, &res.OverSince, &res.BlockAt)
+	} else {
+		err = pool.QueryRow(ctx,
+			`SELECT allowed, used, max_allowed FROM check_and_incr_usage($1, 'query', $2)`,
+			orgID, enforce,
+		).Scan(&res.Allowed, &res.Used, &res.Max)
+	}
 	if err != nil {
-		slog.Warn("metering: check_and_incr_usage falhou (fail-open)", "err", err, "org", orgID)
+		slog.Warn("metering: check de quota falhou (fail-open)", "err", err, "org", orgID)
 		return QuotaResult{Allowed: true}
 	}
 	return res

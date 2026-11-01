@@ -1,6 +1,6 @@
 module github.com/nexusyn/engine
 
-go 1.27.0
+go 1.27.3
 
 require (
 	// Env config

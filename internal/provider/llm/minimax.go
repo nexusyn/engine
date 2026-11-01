@@ -22,7 +22,7 @@ import (
 //   - Schema OpenAI-compatible (messages array com role+content)
 //   - System prompt vai como primeira mensagem com role="system"
 //   - Auth via Bearer token (igual OpenAI)
-//   - Default model `MiniMax-M1` (M2.7 ainda não público em 2026-05-20)
+//   - Default model `MiniMax-M3.1-Flash`
 type MiniMaxProvider struct {
 	apiKey  string
 	model   string
@@ -33,9 +33,11 @@ type MiniMaxProvider struct {
 }
 
 func NewMiniMax(cfg config.ProviderConfig) *MiniMaxProvider {
-	model := cfg.Model
+	// Normaliza espaço em branco (ex: "MiniMax-M3.1 Flash" → "MiniMax-M3.1-Flash",
+	// já que a API /v1/text/chatcompletion_v2 exige hífen e rejeita espaço com 2013).
+	model := strings.ReplaceAll(strings.TrimSpace(cfg.Model), " ", "-")
 	if model == "" {
-		model = "MiniMax-M1"
+		model = "MiniMax-M3.1-Flash"
 	}
 	baseURL := cfg.BaseURL
 	if baseURL == "" {
@@ -64,11 +66,28 @@ type minimaxMessage struct {
 }
 
 type minimaxRequest struct {
-	Model       string           `json:"model"`
-	Messages    []minimaxMessage `json:"messages"`
-	MaxTokens   int              `json:"max_tokens,omitempty"`
-	Temperature float64          `json:"temperature,omitempty"`
-	Stream      bool             `json:"stream,omitempty"`
+	Model           string           `json:"model"`
+	Messages        []minimaxMessage `json:"messages"`
+	MaxTokens       int              `json:"max_tokens,omitempty"`
+	Temperature     float64          `json:"temperature,omitempty"`
+	Stream          bool             `json:"stream,omitempty"`
+	ReasoningEffort string           `json:"reasoning_effort,omitempty"`
+}
+
+// minimaxReasoningAndTokens traduz Prompt.ThinkingBudget para reasoning_effort
+// e garante folga em max_tokens. MiniMax M3.1 exige adaptive thinking (rejeita
+// reasoning_effort="none" com erro 2013) e, sem reasoning_effort="low", pode
+// consumir todos os 8192 max_tokens em reasoning_content em prompts longos
+// (como extract_entities), deixando content vazio.
+func minimaxReasoningAndTokens(prompt Prompt) (string, int) {
+	maxOut := prompt.MaxTokens
+	if prompt.ThinkingBudget > 0 {
+		if maxOut > 0 && maxOut < prompt.ThinkingBudget+2048 {
+			maxOut = prompt.ThinkingBudget + 2048
+		}
+		return "medium", maxOut
+	}
+	return "low", maxOut
 }
 
 type minimaxResponse struct {
@@ -101,11 +120,13 @@ func (m *MiniMaxProvider) Complete(ctx context.Context, prompt Prompt) (Result, 
 	}
 	messages = append(messages, minimaxMessage{Role: "user", Content: prompt.User})
 
+	effort, maxOut := minimaxReasoningAndTokens(prompt)
 	body := minimaxRequest{
-		Model:       m.model,
-		Messages:    messages,
-		MaxTokens:   prompt.MaxTokens,
-		Temperature: prompt.Temperature,
+		Model:           m.model,
+		Messages:        messages,
+		MaxTokens:       maxOut,
+		Temperature:     prompt.Temperature,
+		ReasoningEffort: effort,
 	}
 
 	raw, err := json.Marshal(body)
@@ -173,7 +194,7 @@ func (m *MiniMaxProvider) Complete(ctx context.Context, prompt Prompt) (Result, 
 }
 
 // stripThinking remove blocos <think>...</think> que modelos reasoning
-// (MiniMax M2.7, DeepSeek R1, etc.) emitem antes da resposta final.
+// (MiniMax M3.1 / M2.7, DeepSeek R1, etc.) emitem antes da resposta final.
 // Esses blocos são chain-of-thought interno — não devem entrar na resposta
 // ao usuário/judge. Caso o bloco esteja inacabado (LLM truncou no meio do
 // raciocínio), descarta apenas o que veio depois do <think> SEM remover

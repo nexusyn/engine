@@ -137,7 +137,7 @@ func graphExpansionSearch(ctx context.Context, tx pgx.Tx, query string, limit in
 		WITH RECURSIVE seeds AS (
 			-- operador %% (não similarity()>thr) pra usar o índice GIN trgm
 			-- entities_name_trgm_idx — senão é seq scan de todas as entities (~50ms).
-			-- threshold = GUC pg_trgm.similarity_threshold (0.3 = graphSeedThreshold).
+			-- threshold = GUC pg_trgm.similarity_threshold (0.3 = GraphSeedThreshold).
 			-- Alias-match fica fora daqui de propósito: é o entity-match (canal
 			-- primário) que cobre alias; aqui performance > recall marginal.
 			SELECT e.id, similarity(e.name, $1) AS sim
